@@ -164,6 +164,17 @@ python main.py --start-year 2014 --end-year 2024 --download-pdf --announcement-c
 - 主版本 PDF
 - 旧版本 PDF
 
+### 3. 下载 PDF
+
+```bash
+python main.py --start-year 2014 --end-year 2024 --download-pdf --download-concurrency 2 --request-interval 0.5
+```
+
+该命令会同时下载：
+
+- 主版本 PDF
+- 旧版本 PDF
+
 ### 3. 只跑某一年
 
 ```bash
