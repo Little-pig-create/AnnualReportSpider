@@ -22,6 +22,7 @@
 - [项目结构](#项目结构)
 - [安装](#安装)
 - [快速开始](#快速开始)
+- [文本提取](#文本提取)
 - [命令示例](#命令示例)
 - [参数说明](#参数说明)
 - [输出说明](#输出说明)
@@ -113,6 +114,7 @@
 
 - [main.py](main.py)：程序入口
 - [spider.py](spider.py)：抓取、筛选、下载、审计、清理主逻辑
+- [extract_text.py](extract_text.py)：从已下载 PDF 中提取文本，支持断点续跑
 - [requirements.txt](requirements.txt)：运行依赖
 
 默认运行后会生成：
@@ -120,6 +122,8 @@
 - `annual_reports/`：输出目录
 - `checkpoint.json`：抓取断点状态
 - `cache/`：公告抓取缓存
+- `txt_extract/`：文本提取输出目录（运行 `extract_text.py` 后生成）
+- `text_extract_checkpoint.json`：文本提取断点状态（运行 `extract_text.py` 后生成）
 
 ## 安装
 
@@ -138,6 +142,7 @@ pip install -r requirements.txt
 
 - `requests`
 - `aiohttp`
+- `pymupdf`
 
 ## 快速开始
 
@@ -164,28 +169,61 @@ python main.py --start-year 2014 --end-year 2024 --download-pdf --announcement-c
 - 主版本 PDF
 - 旧版本 PDF
 
-### 3. 下载 PDF
-
-```bash
-python main.py --start-year 2014 --end-year 2024 --download-pdf --download-concurrency 2 --request-interval 0.5
-```
-
-该命令会同时下载：
-
-- 主版本 PDF
-- 旧版本 PDF
-
-### 4. 只跑某一年
+### 3. 只跑某一年
 
 ```bash
 python main.py --start-year 2017 --end-year 2017 --download-pdf --announcement-concurrency 4 --download-concurrency 2 --request-interval 0.5
 ```
 
-### 5. 手动指定公告发布日期范围
+### 4. 手动指定公告发布日期范围
 
 ```bash
 python main.py --start-year 2014 --end-year 2014 --se-date 2015-01-01~2016-06-30 --download-pdf --announcement-concurrency 4 --download-concurrency 2 --request-interval 0.5
 ```
+
+## 文本提取
+
+`extract_text.py` 是独立脚本，不耦合到主抓取流程中。它会读取已经下载好的年报 PDF，按原有目录结构输出 `.txt` 文件，并支持断点续跑。
+
+### 默认行为
+
+- 输入目录：`annual_reports/`
+- 输出目录：`txt_extract/`
+- 断点文件：`text_extract_checkpoint.json`
+- 输出路径映射：`annual_reports/<year>/a.pdf -> txt_extract/<year>/a.txt`
+
+### 基本用法
+
+提取全部已下载 PDF：
+
+```bash
+python extract_text.py
+```
+
+只提取部分年份：
+
+```bash
+python extract_text.py --start-year 2014 --end-year 2016
+```
+
+自定义输入、输出和状态目录：
+
+```bash
+python extract_text.py --input-dir annual_reports --output-dir txt_extract --state-dir .
+```
+
+提高文本提取并发：
+
+```bash
+python extract_text.py --concurrency 4
+```
+
+说明：
+
+- 文本提取使用多进程并发，`--concurrency` 控制工作进程数
+- 已生成的 `.txt` 会直接跳过
+- 中断后重跑会复用 `text_extract_checkpoint.json`
+- 提取结果默认按 PDF 相对路径一一映射到 `txt_extract/`
 
 ## 命令示例
 
@@ -356,6 +394,32 @@ annual_reports/
 | `non_target_pdf_cleanup_report.json` | 孤儿 PDF 清理结果 |
 | `pdf_audit_after_cleanup.json` | 清理后的再次审计结果 |
 
+### 文本提取输出
+
+运行 `extract_text.py` 后，默认会额外生成：
+
+```text
+txt_extract/
+├── 2014/
+│   ├── 000001_平安银行_2014年年度报告_1200694563.txt
+│   └── ...
+├── 2015/
+│   └── ...
+└── text_extract_summary.json
+```
+
+同时会在状态目录生成：
+
+```text
+text_extract_checkpoint.json
+```
+
+其中：
+
+- `txt_extract/<year>/*.txt`：对应 PDF 的纯文本提取结果
+- `text_extract_summary.json`：本轮提取汇总
+- `text_extract_checkpoint.json`：断点状态，供中断后续跑
+
 ## 时间窗口规则
 
 默认情况下，如果不传 `--se-date`，程序会为每个报告年度使用：
@@ -487,6 +551,11 @@ python main.py --cleanup-orphan-pdf
 - `cache/`
 - 已下载完整 PDF
 - `.pdf.part` 断点文件
+
+如果是文本提取任务，直接重新执行 `extract_text.py` 即可。程序会自动复用：
+
+- `text_extract_checkpoint.json`
+- 已存在的 `.txt`
 
 ### 如何按新规则重新全量跑？
 
