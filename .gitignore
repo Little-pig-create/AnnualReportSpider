@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+
+annual_reports/
+annual_reports_v2/
+cache/
+state_v2/
+checkpoint.json
+
+*.part
+*.tmp
+
+* - 副本.py
