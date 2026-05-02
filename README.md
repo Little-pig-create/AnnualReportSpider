@@ -175,13 +175,13 @@ python main.py --start-year 2014 --end-year 2024 --download-pdf --download-concu
 - 主版本 PDF
 - 旧版本 PDF
 
-### 3. 只跑某一年
+### 4. 只跑某一年
 
 ```bash
 python main.py --start-year 2017 --end-year 2017 --download-pdf --announcement-concurrency 4 --download-concurrency 2 --request-interval 0.5
 ```
 
-### 4. 手动指定公告发布日期范围
+### 5. 手动指定公告发布日期范围
 
 ```bash
 python main.py --start-year 2014 --end-year 2014 --se-date 2015-01-01~2016-06-30 --download-pdf --announcement-concurrency 4 --download-concurrency 2 --request-interval 0.5
