@@ -6,6 +6,8 @@ annual_reports_v2/
 cache/
 state_v2/
 checkpoint.json
+text_extract_checkpoint.json
+txt_extract/
 
 *.part
 *.tmp
