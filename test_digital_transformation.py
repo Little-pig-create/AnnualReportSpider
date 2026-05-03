@@ -35,7 +35,7 @@ class DigitalTransformationTests(unittest.TestCase):
         self.assertTrue(math.isclose(calculate_digital_transformation(text), math.log1p(3)))
 
     def test_process_report_uses_unified_category_value(self) -> None:
-        file_path = Path("txt_extract/2024/689009_九号公司_九号有限责任公司2024年年度报告_1223072410.txt")
+        file_path = Path("txt_extract/2024/689009_九号公司_九号有限公司2024年年度报告_1223072410.txt")
         row = process_report(file_path, {})
         self.assertEqual(row["类别"], CATEGORY_VALUE)
         self.assertEqual(row["总词频"], row["数字化转型"])

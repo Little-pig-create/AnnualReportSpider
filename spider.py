@@ -344,6 +344,17 @@ def write_json(path: Path, data: dict):
     tmp.replace(path)
 
 
+def cleanup_checkpoint_file(state_dir: Path):
+    checkpoint_path = state_dir / "checkpoint.json"
+    try:
+        checkpoint_path.unlink()
+        log("INFO", f"已完整结束，自动删除断点文件: {checkpoint_path}")
+    except FileNotFoundError:
+        return
+    except Exception as e:
+        log("WARN", f"断点文件删除失败: {checkpoint_path} ({e})")
+
+
 def write_jsonl(path: Path, rows: list[Any]):
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as f:
@@ -967,22 +978,12 @@ def sync_year_outputs_with_replaced(
         merged_filtered_out = dedupe_filtered_out(merged_filtered_out, kept_ids)
 
         current_report_keys = {report_identity(item) for item in current_reports}
-        current_replaced_keys = {report_identity(item) for item in current_replaced}
-        newly_replaced_keys = {report_identity(item) for item in newly_replaced_reports}
         merged_main_current = [
             item for item in merged_reports
             if report_identity(item) in current_report_keys
         ]
-        merged_replaced_current = dedupe_report_items(
-            current_replaced + newly_replaced_reports,
-            excluded_ids=kept_ids,
-        )
         active_main_reports[target_year] = merged_main_current
-        active_replaced_reports[target_year] = [
-            item for item in merged_replaced_current
-            if report_identity(item) in newly_replaced_keys
-            or report_identity(item) in current_replaced_keys
-        ]
+        active_replaced_reports[target_year] = merged_replaced
 
         write_jsonl(filtered_path, merged_reports)
         write_jsonl(filtered_out_path, merged_filtered_out)
@@ -1023,9 +1024,38 @@ def get_replaced_pdf_target_path(output_dir: Path, item: ReportItem) -> Path:
     return output_dir / str(item.report_year) / REPLACED_PDF_DIRNAME / item.filename
 
 
+def _has_pdf_signature(path: Path) -> bool:
+    try:
+        if not path.exists() or not path.is_file():
+            return False
+        with path.open("rb") as f:
+            return f.read(5) == b"%PDF-"
+    except OSError:
+        return False
+
+
+def _validate_pdf_artifact(path: Path) -> tuple[bool, str]:
+    try:
+        if not path.exists() or not path.is_file():
+            return False, "file missing"
+        if path.stat().st_size < MIN_VALID_PDF_SIZE:
+            return False, "file too small"
+    except OSError as exc:
+        return False, str(exc)
+
+    if not _has_pdf_signature(path):
+        return False, "invalid pdf header"
+    return True, ""
+
+
 def is_download_complete(path: Path) -> bool:
     try:
-        return path.exists() and path.is_file() and path.stat().st_size >= MIN_VALID_PDF_SIZE
+        return (
+            path.exists()
+            and path.is_file()
+            and path.stat().st_size >= MIN_VALID_PDF_SIZE
+            and _has_pdf_signature(path)
+        )
     except OSError:
         return False
 
@@ -1036,12 +1066,18 @@ def _normalize_partial_download(path: Path) -> tuple[Path, bool]:
     if is_download_complete(path):
         return part_path, True
 
+    if part_path.exists() and not _has_pdf_signature(part_path):
+        part_path.unlink(missing_ok=True)
+
     if path.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
-        path_size = path.stat().st_size
-        part_size = part_path.stat().st_size if part_path.exists() else -1
-        if path_size > part_size:
-            path.replace(part_path)
+        if _has_pdf_signature(path):
+            path_size = path.stat().st_size
+            part_size = part_path.stat().st_size if part_path.exists() else -1
+            if path_size > part_size:
+                path.replace(part_path)
+            else:
+                path.unlink(missing_ok=True)
         else:
             path.unlink(missing_ok=True)
 
@@ -1585,8 +1621,12 @@ def download_pdf_sync(url: str, path: Path, retries: int = 6) -> tuple[bool, str
 
             with requests.get(url, headers=headers, timeout=90, stream=True) as resp:
                 if resp.status_code == 416 and resume_from >= MIN_VALID_PDF_SIZE:
-                    part_path.replace(path)
-                    return True, "exists"
+                    ok, reason = _validate_pdf_artifact(part_path)
+                    if ok:
+                        part_path.replace(path)
+                        return True, "exists"
+                    part_path.unlink(missing_ok=True)
+                    raise RuntimeError(reason)
                 if resp.status_code not in (200, 206):
                     raise RuntimeError(f"HTTP {resp.status_code}")
 
@@ -1601,9 +1641,10 @@ def download_pdf_sync(url: str, path: Path, retries: int = 6) -> tuple[bool, str
                         if chunk:
                             f.write(chunk)
 
-            if part_path.stat().st_size < MIN_VALID_PDF_SIZE:
+            ok, reason = _validate_pdf_artifact(part_path)
+            if not ok:
                 part_path.unlink(missing_ok=True)
-                raise RuntimeError("file too small")
+                raise RuntimeError(reason)
             part_path.replace(path)
             return True, "downloaded"
         except Exception as e:
@@ -1631,8 +1672,12 @@ async def download_pdf_async(
                 if session is not None and aiohttp is not None:
                     async with session.get(url, headers=headers) as resp:
                         if resp.status == 416 and resume_from >= MIN_VALID_PDF_SIZE:
-                            part_path.replace(path)
-                            return True, "exists"
+                            ok, reason = _validate_pdf_artifact(part_path)
+                            if ok:
+                                part_path.replace(path)
+                                return True, "exists"
+                            part_path.unlink(missing_ok=True)
+                            raise RuntimeError(reason)
                         if resp.status not in (200, 206):
                             raise RuntimeError(f"HTTP {resp.status}")
 
@@ -1651,9 +1696,10 @@ async def download_pdf_async(
                         return ok, msg
                     raise RuntimeError(msg)
 
-            if part_path.stat().st_size < MIN_VALID_PDF_SIZE:
+            ok, reason = _validate_pdf_artifact(part_path)
+            if not ok:
                 part_path.unlink(missing_ok=True)
-                raise RuntimeError("file too small")
+                raise RuntimeError(reason)
             part_path.replace(path)
             return True, "downloaded"
         except Exception as e:
@@ -2108,7 +2154,7 @@ async def async_main(args):
             await run_years(announcement_session=None, download_session=None)
         else:
             timeout = aiohttp.ClientTimeout(total=120)
-            connector = aiohttp.TCPConnector(limit=max(32, args.announcement_concurrency * 4), ssl=False)
+            connector = aiohttp.TCPConnector(limit=max(32, args.announcement_concurrency * 4))
             async with aiohttp.ClientSession(
                 timeout=timeout,
                 connector=connector,
@@ -2131,6 +2177,7 @@ async def async_main(args):
         log("INFO", f"  输出目录: {output_dir}")
         log("INFO", f"  汇总文件: {summary_path}")
         log("INFO", "=" * 60)
+        cleanup_checkpoint_file(state_dir)
         return
 
     if aiohttp is None:
@@ -2138,8 +2185,8 @@ async def async_main(args):
         await run_years(announcement_session=None, download_session=None)
     else:
         timeout = aiohttp.ClientTimeout(total=120)
-        ann_connector = aiohttp.TCPConnector(limit=max(32, args.announcement_concurrency * 4), ssl=False)
-        dl_connector = aiohttp.TCPConnector(limit=max(32, args.download_concurrency * 4), ssl=False)
+        ann_connector = aiohttp.TCPConnector(limit=max(32, args.announcement_concurrency * 4))
+        dl_connector = aiohttp.TCPConnector(limit=max(32, args.download_concurrency * 4))
         async with aiohttp.ClientSession(
             timeout=timeout,
             connector=ann_connector,
@@ -2168,6 +2215,7 @@ async def async_main(args):
     log("INFO", f"  输出目录: {output_dir}")
     log("INFO", f"  汇总文件: {summary_path}")
     log("INFO", "=" * 60)
+    cleanup_checkpoint_file(state_dir)
 
 
 def build_parser() -> argparse.ArgumentParser:
