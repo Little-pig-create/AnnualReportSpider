@@ -3,13 +3,17 @@ __pycache__/
 
 annual_reports/
 annual_reports_v2/
+txt_extract/
 cache/
 state_v2/
 checkpoint.json
 text_extract_checkpoint.json
-txt_extract/
+digital_transformation_checkpoint.jsonl
+digital_transformation_panel.csv
+digital_transformation_labels.csv
 
 *.part
 *.tmp
 
-* - 副本.py
+* - 鍓湰.py
+吴 等 - 2021 - 企业数字化转型与资本市场表现——来自股票流动性的经验证据.pdf

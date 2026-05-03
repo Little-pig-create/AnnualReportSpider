@@ -48,6 +48,16 @@ def write_json(path: Path, data: dict[str, Any]) -> None:
     tmp_path.replace(path)
 
 
+def cleanup_checkpoint_file(path: Path) -> None:
+    try:
+        path.unlink()
+        log("INFO", f"checkpoint removed: {path}")
+    except FileNotFoundError:
+        return
+    except Exception as exc:
+        log("WARN", f"failed to remove checkpoint: {path} | {exc}")
+
+
 def build_job_key(input_dir: Path, output_dir: Path) -> str:
     return f"{input_dir.resolve()}::{output_dir.resolve()}"
 
@@ -72,11 +82,19 @@ def collect_pdf_paths(
             if end_year is not None and year > end_year:
                 continue
             pdf_paths.extend(
-                sorted(path for path in year_dir.rglob("*.pdf") if path.is_file())
+                sorted(
+                    path
+                    for path in year_dir.rglob("*.pdf")
+                    if path.is_file() and "replaced_pdfs" not in path.parts
+                )
             )
         return pdf_paths
 
-    return sorted(path for path in input_dir.rglob("*.pdf") if path.is_file())
+    return sorted(
+        path
+        for path in input_dir.rglob("*.pdf")
+        if path.is_file() and "replaced_pdfs" not in path.parts
+    )
 
 
 def build_output_path(input_dir: Path, output_dir: Path, pdf_path: Path) -> Path:
@@ -275,8 +293,8 @@ async def run(args: argparse.Namespace) -> None:
         "INFO",
         f"text extraction done: extracted={stats['extracted']}, existing={stats['exists']}, failed={stats['failed']}",
     )
-    log("INFO", f"  checkpoint: {checkpoint_path}")
     log("INFO", f"  summary: {output_dir / SUMMARY_NAME}")
+    cleanup_checkpoint_file(checkpoint_path)
 
 
 def build_parser() -> argparse.ArgumentParser:
