@@ -136,8 +136,7 @@ VARIABLE_LABELS = [
     ("year", "年份"),
     ("类别", "类别"),
     ("公司简称", "公司简称"),
-    ("行业名称", "行业名称"),
-    ("行业代码", "行业代码"),
+    ("是否ST", "是否ST"),
     ("全文文本总长度", "全文-文本总长度"),
     ("仅中英文文本总长度", "仅中英文-文本总长度"),
     ("人工智能技术", "人工智能技术词频数"),
@@ -165,6 +164,43 @@ def _normalize_text(text: str) -> str:
     text = unicodedata.normalize("NFKC", text).lower()
     text = re.sub(r"\s+", "", text)
     return text
+
+
+def clean_company_name(name: str) -> str:
+    normalized = unicodedata.normalize("NFKC", name or "")
+    normalized = re.sub(r"[\u3000\s]+", "", normalized)
+    normalized = normalized.strip("：:;；,，。.!！?？()（）[]【】<>《》\"'“”‘’")
+    return normalized
+
+
+def is_company_name_candidate(part: str) -> bool:
+    candidate = clean_company_name(part)
+    if not candidate:
+        return False
+    if candidate.isdigit():
+        return False
+    if re.fullmatch(r"20\d{2}年.*", candidate):
+        return False
+    if "年度报告" in candidate or "半年度报告" in candidate or "摘要" in candidate:
+        return False
+    return True
+
+
+def extract_company_name_from_filename(file_path: Path) -> str:
+    parts = [clean_company_name(part) for part in file_path.stem.split("_")[1:]]
+    for index, part in enumerate(parts):
+        if not is_company_name_candidate(part):
+            continue
+        if part == "S" and index + 1 < len(parts):
+            next_part = parts[index + 1]
+            if next_part.startswith("ST") or next_part.startswith("*ST"):
+                return f"{part}{next_part}"
+        return part
+    return ""
+
+
+def is_st_company(company_name: str) -> int:
+    return int("ST" in clean_company_name(company_name).upper())
 
 
 def _is_negated(text: str, keyword_start: int, window: int = 4) -> bool:
@@ -231,7 +267,7 @@ def calculate_digital_transformation(text: str) -> float:
 def parse_report_metadata(file_path: Path) -> dict:
     stem_parts = file_path.stem.split("_")
     stock_code = stem_parts[0] if stem_parts else ""
-    company_name = stem_parts[1] if len(stem_parts) > 1 else ""
+    company_name = extract_company_name_from_filename(file_path)
 
     report_year_match = re.search(r"(20\d{2})年年度报告", file_path.stem)
     report_year = report_year_match.group(1) if report_year_match else file_path.parent.name
@@ -298,8 +334,6 @@ def load_company_meta(meta_file: Path | None) -> dict:
             key = (stock_code, year) if year else (stock_code, "")
             records[key] = {
                 "类别": (row.get("类别") or row.get("category") or row.get("board") or "").strip(),
-                "行业名称": (row.get("行业名称") or row.get("industry_name") or "").strip(),
-                "行业代码": (row.get("行业代码") or row.get("industry_code") or "").strip(),
                 "公司简称": (row.get("公司简称") or row.get("company_name") or row.get("sec_name") or "").strip(),
             }
         return records
@@ -315,14 +349,17 @@ def process_report(file_path: Path, meta_map: dict) -> dict:
     total_count = sum(group_counts.values())
     report_meta = parse_report_metadata(file_path)
     company_meta = lookup_company_meta(meta_map, report_meta["stkcd"], report_meta["year"])
+    company_name = (
+        clean_company_name(company_meta.get("公司简称", ""))
+        or report_meta["公司简称"]
+    )
 
     row = {
         "stkcd": report_meta["stkcd"],
         "year": report_meta["year"],
         "类别": CATEGORY_VALUE,
-        "公司简称": company_meta.get("公司简称") or report_meta["公司简称"],
-        "行业名称": company_meta.get("行业名称", ""),
-        "行业代码": company_meta.get("行业代码", ""),
+        "公司简称": company_name,
+        "是否ST": is_st_company(company_name),
         "全文文本总长度": len(text),
         "仅中英文文本总长度": count_chinese_english_length(text),
         "人工智能技术": group_counts["人工智能技术"],

@@ -47,7 +47,16 @@ class DigitalTransformationTests(unittest.TestCase):
             + row["数字技术应用"]
         )
         self.assertEqual(row["类别"], CATEGORY_VALUE)
+        self.assertEqual(row["是否ST"], 0)
+        self.assertNotIn("行业名称", row)
+        self.assertNotIn("行业代码", row)
         self.assertEqual(row["数字化转型"], five_group_total)
+
+    def test_process_report_marks_st_company(self) -> None:
+        file_path = Path("txt_extract/2017/600733_S_ST前锋_2017年年度报告_1204402028.txt")
+        row = process_report(file_path, {})
+        self.assertEqual(row["公司简称"], "SST前锋")
+        self.assertEqual(row["是否ST"], 1)
 
     def test_parse_report_metadata_and_year_filter(self) -> None:
         file_path = Path("txt_extract/2019/000001_平安银行_2019年年度报告_1207305488.txt")
@@ -58,6 +67,21 @@ class DigitalTransformationTests(unittest.TestCase):
         self.assertEqual(metadata["公司简称"], "平安银行")
         self.assertTrue(file_in_year_range(file_path, 2014, 2024))
         self.assertFalse(file_in_year_range(file_path, 2020, 2024))
+
+    def test_parse_report_metadata_handles_empty_filename_segment(self) -> None:
+        file_path = Path("txt_extract/2014/000033__ST新都_2014年年度报告_1200948360.txt")
+        metadata = parse_report_metadata(file_path)
+        self.assertEqual(metadata["公司简称"], "ST新都")
+
+    def test_parse_report_metadata_normalizes_spaces_and_fullwidth_chars(self) -> None:
+        file_path = Path("txt_extract/2014/000002_万  科Ａ_2014年年度报告_1200767951.txt")
+        metadata = parse_report_metadata(file_path)
+        self.assertEqual(metadata["公司简称"], "万科A")
+
+    def test_parse_report_metadata_combines_split_s_prefix(self) -> None:
+        file_path = Path("txt_extract/2017/600733_S_ST前锋_2017年年度报告_1204402028.txt")
+        metadata = parse_report_metadata(file_path)
+        self.assertEqual(metadata["公司简称"], "SST前锋")
 
     def test_year_filter_falls_back_to_parent_folder_when_title_pattern_missing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
