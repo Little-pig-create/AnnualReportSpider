@@ -146,19 +146,19 @@ VARIABLE_LABELS = [
     ("大数据技术", "大数据技术词频数"),
     ("数字技术应用", "数字技术应用词频数"),
     ("数字化转型", "数字化转型词频数"),
-    ("总词频", "总词频"),
     ("ln人工智能技术", "人工智能技术加1取数"),
     ("ln区块链技术", "区块链技术加1取数"),
     ("ln云计算技术", "云计算技术加1取数"),
     ("ln大数据技术", "大数据技术加1取数"),
     ("ln数字技术应用", "数字技术应用加1取数"),
     ("lndigit", "数字化转型加1取数"),
-    ("Ln总词频", "Ln总词频"),
 ]
 
 CATEGORY_VALUE = "A股"
 CHECKPOINT_VERSION = 1
 LOGGER = logging.getLogger(__name__)
+DEFAULT_START_YEAR = 2014
+DEFAULT_END_YEAR = 2024
 
 
 def _normalize_text(text: str) -> str:
@@ -331,14 +331,12 @@ def process_report(file_path: Path, meta_map: dict) -> dict:
         "大数据技术": group_counts["大数据技术"],
         "数字技术应用": group_counts["数字技术应用"],
         "数字化转型": total_count,
-        "总词频": total_count,
         "ln人工智能技术": round(math.log1p(group_counts["人工智能技术"]), 6),
         "ln区块链技术": round(math.log1p(group_counts["区块链技术"]), 6),
         "ln云计算技术": round(math.log1p(group_counts["云计算技术"]), 6),
         "ln大数据技术": round(math.log1p(group_counts["大数据技术"]), 6),
         "ln数字技术应用": round(math.log1p(group_counts["数字技术应用"]), 6),
         "lndigit": round(math.log1p(total_count), 6),
-        "Ln总词频": round(math.log1p(total_count), 6),
     }
     return row
 
@@ -417,6 +415,7 @@ def build_panel(
     executor_type: str = "process",
     log_every: int = 1000,
     reset_checkpoint: bool = False,
+    delete_checkpoint_on_success: bool = False,
 ) -> None:
     start_time = time.perf_counter()
     meta_map = load_company_meta(meta_file)
@@ -481,14 +480,17 @@ def build_panel(
     output_rows = [checkpoint_rows[file_key] for file_key in report_keys if file_key in checkpoint_rows]
     write_output_files(output_rows, output_file, label_file)
 
-    if checkpoint_file.exists():
+    if delete_checkpoint_on_success and checkpoint_file.exists():
         checkpoint_file.unlink()
 
     elapsed = time.perf_counter() - start_time
     LOGGER.info("面板数据已写入: %s", output_file)
     if label_file:
         LOGGER.info("字段标签已写入: %s", label_file)
-    LOGGER.info("任务已完整结束，checkpoint 已删除: %s", checkpoint_file)
+    if delete_checkpoint_on_success:
+        LOGGER.info("任务已完整结束，checkpoint 已删除: %s", checkpoint_file)
+    else:
+        LOGGER.info("任务已完整结束，checkpoint 已保留: %s", checkpoint_file)
     LOGGER.info("全部完成，用时 %.2f 秒。", elapsed)
 
 
@@ -534,13 +536,13 @@ def main() -> None:
     parser.add_argument(
         "--start-year",
         type=int,
-        default=2014,
+        default=DEFAULT_START_YEAR,
         help="起始年份，默认 2014",
     )
     parser.add_argument(
         "--end-year",
         type=int,
-        default=2024,
+        default=DEFAULT_END_YEAR,
         help="结束年份，默认 2024",
     )
     parser.add_argument(
@@ -560,6 +562,11 @@ def main() -> None:
         action="store_true",
         help="忽略并删除旧 checkpoint，从头开始重跑",
     )
+    parser.add_argument(
+        "--delete-checkpoint-on-success",
+        action="store_true",
+        help="任务完整结束后自动删除 checkpoint；默认保留",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -569,6 +576,8 @@ def main() -> None:
 
     meta_file = Path(args.meta_file) if args.meta_file else None
     label_file = Path(args.label_file) if args.label_file else None
+    if args.start_year > args.end_year:
+        raise ValueError(f"起始年份不能大于结束年份: {args.start_year}-{args.end_year}")
     build_panel(
         input_dir=Path(args.input_dir),
         output_file=Path(args.output_file),
@@ -581,6 +590,7 @@ def main() -> None:
         executor_type=args.executor,
         log_every=args.log_every,
         reset_checkpoint=args.reset_checkpoint,
+        delete_checkpoint_on_success=args.delete_checkpoint_on_success,
     )
 
 

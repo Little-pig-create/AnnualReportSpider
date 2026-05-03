@@ -5,6 +5,8 @@ from pathlib import Path
 
 from digital_transformation import (
     CATEGORY_VALUE,
+    DEFAULT_END_YEAR,
+    DEFAULT_START_YEAR,
     append_checkpoint_entry,
     build_panel,
     calculate_digital_transformation,
@@ -37,9 +39,15 @@ class DigitalTransformationTests(unittest.TestCase):
     def test_process_report_uses_unified_category_value(self) -> None:
         file_path = Path("txt_extract/2024/689009_九号公司_九号有限公司2024年年度报告_1223072410.txt")
         row = process_report(file_path, {})
+        five_group_total = (
+            row["人工智能技术"]
+            + row["区块链技术"]
+            + row["云计算技术"]
+            + row["大数据技术"]
+            + row["数字技术应用"]
+        )
         self.assertEqual(row["类别"], CATEGORY_VALUE)
-        self.assertEqual(row["总词频"], row["数字化转型"])
-        self.assertEqual(row["Ln总词频"], row["lndigit"])
+        self.assertEqual(row["数字化转型"], five_group_total)
 
     def test_parse_report_metadata_and_year_filter(self) -> None:
         file_path = Path("txt_extract/2019/000001_平安银行_2019年年度报告_1207305488.txt")
@@ -73,7 +81,11 @@ class DigitalTransformationTests(unittest.TestCase):
             loaded = load_checkpoint(checkpoint_file)
             self.assertEqual(loaded["file-a"], row)
 
-    def test_build_panel_deletes_checkpoint_after_success(self) -> None:
+    def test_default_year_range_constants(self) -> None:
+        self.assertEqual(DEFAULT_START_YEAR, 2014)
+        self.assertEqual(DEFAULT_END_YEAR, 2024)
+
+    def test_build_panel_keeps_checkpoint_by_default(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_dir_path = Path(tmp_dir)
             input_dir = tmp_dir_path / "txt_extract" / "2024"
@@ -95,6 +107,34 @@ class DigitalTransformationTests(unittest.TestCase):
                 executor_type="thread",
                 log_every=1,
                 reset_checkpoint=False,
+            )
+
+            self.assertTrue(output_file.exists())
+            self.assertTrue(checkpoint_file.exists())
+
+    def test_build_panel_deletes_checkpoint_when_enabled(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_dir_path = Path(tmp_dir)
+            input_dir = tmp_dir_path / "txt_extract" / "2024"
+            input_dir.mkdir(parents=True, exist_ok=True)
+            sample_file = input_dir / "000001_测试公司_2024年年度报告_1.txt"
+            sample_file.write_text("人工智能 云计算", encoding="utf-8")
+
+            output_file = tmp_dir_path / "panel.csv"
+            checkpoint_file = tmp_dir_path / "checkpoint.jsonl"
+
+            build_panel(
+                input_dir=tmp_dir_path / "txt_extract",
+                output_file=output_file,
+                label_file=None,
+                checkpoint_file=checkpoint_file,
+                start_year=2024,
+                end_year=2024,
+                workers=1,
+                executor_type="thread",
+                log_every=1,
+                reset_checkpoint=False,
+                delete_checkpoint_on_success=True,
             )
 
             self.assertTrue(output_file.exists())
