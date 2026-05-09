@@ -8,8 +8,10 @@ from unittest import mock
 import spider
 from spider import (
     ReportItem,
+    append_permanent_download_failure,
     download_pdf_sync,
     is_download_complete,
+    load_permanent_download_failures,
     sync_year_outputs_with_replaced,
     write_jsonl,
 )
@@ -69,6 +71,40 @@ class SpiderTests(unittest.TestCase):
             self.assertEqual(message, "invalid pdf header")
             self.assertFalse(pdf_path.exists())
             self.assertFalse(pdf_path.with_suffix(".pdf.part").exists())
+
+    def test_download_pdf_sync_does_not_retry_permanent_404(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            pdf_path = Path(tmp_dir) / "download.pdf"
+            fake_response = FakeResponse(404, [])
+
+            with mock.patch("spider.requests.get", return_value=fake_response) as get_mock:
+                ok, message = download_pdf_sync("https://example.com/missing.pdf", pdf_path, retries=6)
+
+            self.assertFalse(ok)
+            self.assertEqual(message, "permanent HTTP 404")
+            self.assertEqual(get_mock.call_count, 1)
+            self.assertFalse(pdf_path.exists())
+            self.assertFalse(pdf_path.with_suffix(".pdf.part").exists())
+
+    def test_permanent_download_failures_are_loaded_by_key(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_dir = Path(tmp_dir)
+            item = build_report_item("123", "2024年年度报告", 1)
+            keys: set[tuple[str, str, str]] = set()
+
+            append_permanent_download_failure(
+                output_dir,
+                "replaced",
+                item,
+                output_dir / "2024" / "replaced_pdfs" / item.filename,
+                "permanent HTTP 404",
+                keys,
+            )
+
+            self.assertEqual(
+                load_permanent_download_failures(output_dir, {2024}),
+                {("replaced", "123", item.adjunct_url)},
+            )
 
     def test_sync_year_outputs_backfills_existing_replaced_reports(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

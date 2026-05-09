@@ -1,0 +1,28 @@
+{
+  "workspace": {
+    "project_root": "C:/Users/xiaozhu/Documents/Codex",
+    "annual_report_dir": "C:/Users/xiaozhu/Documents/Codex",
+    "text_output_dir": "txt_extract",
+    "state_dir": ".",
+    "start_year": 2014,
+    "end_year": 2024
+  },
+  "spider": {
+    "se_date": "",
+    "page_size": 30,
+    "request_interval": 0.2,
+    "announcement_concurrency": 2,
+    "download_concurrency": 2,
+    "download_pdf": true,
+    "metadata_only": false,
+    "audit_pdf": false,
+    "cleanup_orphan_pdf": false,
+    "reset_checkpoint": false,
+    "delete_checkpoint_on_success": false
+  },
+  "extract": {
+    "concurrency": 2,
+    "reset_checkpoint": false,
+    "delete_checkpoint_on_success": true
+  }
+}

@@ -1,0 +1,77 @@
+:root {
+  --bg: #f3efe8;
+  --bg-ink: #102033;
+  --panel: rgba(255, 252, 247, 0.9);
+  --panel-alt: #f5efe5;
+  --panel-strong: #ffffff;
+  --line: rgba(17, 24, 39, 0.12);
+  --text: #1f2937;
+  --muted: #697586;
+  --brand: #0f766e;
+  --brand-deep: #155e75;
+  --brand-soft: #d9f0ee;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  min-height: 100%;
+  margin: 0;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+html::-webkit-scrollbar,
+body::-webkit-scrollbar,
+#app::-webkit-scrollbar,
+*::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+body {
+  font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  color: var(--text);
+  background:
+    linear-gradient(180deg, rgba(16, 32, 51, 0.05), transparent 24%),
+    radial-gradient(circle at 10% 0%, rgba(15, 118, 110, 0.1), transparent 24%),
+    radial-gradient(circle at 100% 10%, rgba(29, 78, 216, 0.08), transparent 28%),
+    var(--bg);
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+.surface {
+  padding: 24px;
+  border-radius: 30px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  box-shadow: 0 22px 50px rgba(16, 32, 51, 0.06);
+}
+
+.section-kicker {
+  margin: 0;
+  color: var(--brand);
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  font-size: 11px;
+}
+
+.scrollbar-hidden {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.scrollbar-hidden::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}

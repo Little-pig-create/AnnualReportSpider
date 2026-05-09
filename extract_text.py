@@ -4,9 +4,10 @@ import argparse
 import asyncio
 import json
 from concurrent.futures import ProcessPoolExecutor
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 try:
     import fitz
@@ -22,11 +23,37 @@ DEFAULT_STATE_DIR = "."
 CHECKPOINT_NAME = "text_extract_checkpoint.json"
 SUMMARY_NAME = "text_extract_summary.json"
 FAILED_SAMPLE_LIMIT = 50
+LogCallback = Callable[[str, str], None]
+ProgressCallback = Callable[[dict[str, Any]], None]
 
 
 def log(level: str, message: str) -> None:
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     print(f"[{level}] {now} {message}", flush=True)
+
+
+@dataclass(slots=True)
+class ExtractTextConfig:
+    input_dir: Path
+    output_dir: Path
+    state_dir: Path
+    start_year: Optional[int] = None
+    end_year: Optional[int] = None
+    concurrency: int = 2
+
+
+@dataclass(slots=True)
+class ExtractTextResult:
+    summary: dict[str, Any]
+    summary_path: Path
+    checkpoint_path: Path
+    stats: dict[str, int]
+    pdf_total: int
+    pending_total: int
+
+
+class ExtractionCancelled(Exception):
+    """Raised when an extraction task is cancelled by the caller."""
 
 
 def read_json(path: Path) -> Optional[dict[str, Any]]:
@@ -48,16 +75,6 @@ def write_json(path: Path, data: dict[str, Any]) -> None:
     tmp_path.replace(path)
 
 
-def cleanup_checkpoint_file(path: Path) -> None:
-    try:
-        path.unlink()
-        log("INFO", f"checkpoint removed: {path}")
-    except FileNotFoundError:
-        return
-    except Exception as exc:
-        log("WARN", f"failed to remove checkpoint: {path} | {exc}")
-
-
 def build_job_key(input_dir: Path, output_dir: Path) -> str:
     return f"{input_dir.resolve()}::{output_dir.resolve()}"
 
@@ -68,7 +85,7 @@ def collect_pdf_paths(
     end_year: Optional[int] = None,
 ) -> list[Path]:
     if not input_dir.exists():
-        raise FileNotFoundError(f"input dir does not exist: {input_dir}")
+        raise FileNotFoundError(f"输入目录不存在：{input_dir}")
 
     year_dirs = sorted(
         path for path in input_dir.iterdir() if path.is_dir() and path.name.isdigit()
@@ -167,18 +184,48 @@ def build_summary(
     return summary
 
 
-async def run(args: argparse.Namespace) -> None:
-    input_dir = Path(args.input_dir)
-    output_dir = Path(args.output_dir)
-    state_dir = Path(args.state_dir)
+def emit_log(log_callback: Optional[LogCallback], level: str, message: str) -> None:
+    if log_callback is None:
+        log(level, message)
+        return
+    log_callback(level, message)
 
-    if args.start_year is not None and args.end_year is not None and args.start_year > args.end_year:
-        raise ValueError("start-year > end-year")
+
+def emit_progress(progress_callback: Optional[ProgressCallback], **payload: Any) -> None:
+    if progress_callback is None:
+        return
+    progress_callback(payload)
+
+
+def build_config_from_args(args: argparse.Namespace) -> ExtractTextConfig:
+    return ExtractTextConfig(
+        input_dir=Path(args.input_dir),
+        output_dir=Path(args.output_dir),
+        state_dir=Path(args.state_dir),
+        start_year=args.start_year,
+        end_year=args.end_year,
+        concurrency=args.concurrency,
+    )
+
+
+async def run_extraction(
+    config: ExtractTextConfig,
+    *,
+    log_callback: Optional[LogCallback] = None,
+    progress_callback: Optional[ProgressCallback] = None,
+    cancel_requested: Optional[Callable[[], bool]] = None,
+) -> ExtractTextResult:
+    input_dir = config.input_dir
+    output_dir = config.output_dir
+    state_dir = config.state_dir
+
+    if config.start_year is not None and config.end_year is not None and config.start_year > config.end_year:
+        raise ValueError("起始年份不能大于结束年份")
 
     output_dir.mkdir(parents=True, exist_ok=True)
     state_dir.mkdir(parents=True, exist_ok=True)
 
-    pdf_paths = collect_pdf_paths(input_dir, args.start_year, args.end_year)
+    pdf_paths = collect_pdf_paths(input_dir, config.start_year, config.end_year)
     checkpoint_path = state_dir / CHECKPOINT_NAME
     checkpoint = read_json(checkpoint_path) or {}
     jobs = checkpoint.get("jobs")
@@ -230,16 +277,28 @@ async def run(args: argparse.Namespace) -> None:
     job["updated_at"] = datetime.now().isoformat(timespec="seconds")
     write_json(checkpoint_path, checkpoint)
 
-    log(
+    emit_log(
+        log_callback,
         "INFO",
         (
-            f"text extraction start: input={input_dir}, output={output_dir}, "
-            f"existing={stats['exists']}, pending={len(work_items)}, workers={max(1, args.concurrency)}"
+            f"文本提取开始：输入目录={input_dir}，输出目录={output_dir}，"
+            f"已存在={stats['exists']}，待处理={len(work_items)}，workers={max(1, config.concurrency)}"
         ),
     )
+    emit_progress(
+        progress_callback,
+        phase="prepare",
+        total=len(work_items),
+        completed=0,
+        existing=stats["exists"],
+        failed=stats["failed"],
+        extracted=stats["extracted"],
+        pdf_total=len(pdf_paths),
+    )
 
-    worker_count = max(1, args.concurrency)
-    with ProcessPoolExecutor(max_workers=worker_count) as executor:
+    worker_count = max(1, config.concurrency)
+    executor = ProcessPoolExecutor(max_workers=worker_count)
+    try:
         tasks = [
             asyncio.create_task(extract_one(pdf_path, output_path, executor))
             for pdf_path, output_path in work_items
@@ -248,6 +307,12 @@ async def run(args: argparse.Namespace) -> None:
         finished = 0
         total = len(tasks)
         for task in asyncio.as_completed(tasks):
+            if cancel_requested is not None and cancel_requested():
+                for pending_task in tasks:
+                    pending_task.cancel()
+                executor.shutdown(wait=False, cancel_futures=True)
+                raise ExtractionCancelled("文本提取已取消")
+
             pdf_path, output_path, ok, err, page_count, char_count = await task
             finished += 1
             rel_pdf = pdf_path.relative_to(input_dir).as_posix()
@@ -262,7 +327,7 @@ async def run(args: argparse.Namespace) -> None:
                     "chars": char_count,
                     "updated_at": datetime.now().isoformat(timespec="seconds"),
                 }
-                log("INFO", f"text extracted [{finished}/{total}]: {rel_pdf}")
+                emit_log(log_callback, "INFO", f"文本提取完成 [{finished}/{total}]：{rel_pdf}")
             else:
                 stats["failed"] += 1
                 files[rel_pdf] = {
@@ -273,28 +338,66 @@ async def run(args: argparse.Namespace) -> None:
                 }
                 if len(failed_samples) < FAILED_SAMPLE_LIMIT:
                     failed_samples.append({"pdf": rel_pdf, "error": err})
-                log("ERROR", f"text extract failed [{finished}/{total}]: {rel_pdf} | {err}")
+                emit_log(log_callback, "ERROR", f"文本提取失败 [{finished}/{total}]：{rel_pdf} | {err}")
 
             job["updated_at"] = datetime.now().isoformat(timespec="seconds")
             write_json(checkpoint_path, checkpoint)
+            emit_progress(
+                progress_callback,
+                phase="extract",
+                total=total,
+                completed=finished,
+                existing=stats["exists"],
+                failed=stats["failed"],
+                extracted=stats["extracted"],
+                current_pdf=rel_pdf,
+                current_output=rel_txt,
+            )
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
 
     summary = build_summary(
         input_dir,
         output_dir,
         pdf_paths,
         stats,
-        args.start_year,
-        args.end_year,
+        config.start_year,
+        config.end_year,
         failed_samples,
     )
-    write_json(output_dir / SUMMARY_NAME, summary)
+    summary_path = output_dir / SUMMARY_NAME
+    write_json(summary_path, summary)
 
-    log(
+    emit_log(
+        log_callback,
         "INFO",
-        f"text extraction done: extracted={stats['extracted']}, existing={stats['exists']}, failed={stats['failed']}",
+        f"文本提取完成：提取={stats['extracted']}，已存在={stats['exists']}，失败={stats['failed']}",
     )
-    log("INFO", f"  summary: {output_dir / SUMMARY_NAME}")
-    cleanup_checkpoint_file(checkpoint_path)
+    emit_log(log_callback, "INFO", f"  checkpoint：{checkpoint_path}")
+    emit_log(log_callback, "INFO", f"  汇总文件：{summary_path}")
+    emit_progress(
+        progress_callback,
+        phase="done",
+        total=len(work_items),
+        completed=len(work_items),
+        existing=stats["exists"],
+        failed=stats["failed"],
+        extracted=stats["extracted"],
+        summary_path=str(summary_path),
+        checkpoint_path=str(checkpoint_path),
+    )
+    return ExtractTextResult(
+        summary=summary,
+        summary_path=summary_path,
+        checkpoint_path=checkpoint_path,
+        stats=dict(stats),
+        pdf_total=len(pdf_paths),
+        pending_total=len(work_items),
+    )
+
+
+async def run(args: argparse.Namespace) -> None:
+    await run_extraction(build_config_from_args(args))
 
 
 def build_parser() -> argparse.ArgumentParser:

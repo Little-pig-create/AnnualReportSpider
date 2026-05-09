@@ -9,8 +9,10 @@ import re
 import time
 import unicodedata
 from collections import defaultdict
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, Callable
 
 
 KEYWORD_GROUPS = {
@@ -158,6 +160,35 @@ CHECKPOINT_VERSION = 1
 LOGGER = logging.getLogger(__name__)
 DEFAULT_START_YEAR = 2014
 DEFAULT_END_YEAR = 2024
+LogCallback = Callable[[str, str], None]
+ProgressCallback = Callable[[dict[str, Any]], None]
+
+
+@dataclass(slots=True)
+class DigitalTransformationConfig:
+    input_dir: Path
+    output_file: Path
+    label_file: Path | None
+    checkpoint_file: Path
+    meta_file: Path | None = None
+    workers: int | None = None
+    start_year: int | None = None
+    end_year: int | None = None
+    executor_type: str = "process"
+    log_every: int = 1000
+    reset_checkpoint: bool = False
+    delete_checkpoint_on_success: bool = False
+
+
+@dataclass(slots=True)
+class DigitalTransformationResult:
+    output_file: Path
+    label_file: Path | None
+    checkpoint_file: Path
+    report_total: int
+    pending_total: int
+    completed_total: int
+    elapsed_seconds: float
 
 
 def _normalize_text(text: str) -> str:
@@ -440,6 +471,36 @@ def write_output_files(rows: list[dict], output_file: Path, label_file: Path | N
             writer.writerows(VARIABLE_LABELS)
 
 
+def emit_log(log_callback: LogCallback | None, level: str, message: str) -> None:
+    if log_callback is None:
+        getattr(LOGGER, level.lower())(message)
+        return
+    log_callback(level.upper(), message)
+
+
+def emit_progress(progress_callback: ProgressCallback | None, **payload: Any) -> None:
+    if progress_callback is None:
+        return
+    progress_callback(payload)
+
+
+def build_config_from_args(args: argparse.Namespace) -> DigitalTransformationConfig:
+    return DigitalTransformationConfig(
+        input_dir=Path(args.input_dir),
+        output_file=Path(args.output_file),
+        label_file=Path(args.label_file) if args.label_file else None,
+        checkpoint_file=Path(args.checkpoint_file),
+        meta_file=Path(args.meta_file) if args.meta_file else None,
+        workers=args.workers,
+        start_year=args.start_year,
+        end_year=args.end_year,
+        executor_type=args.executor,
+        log_every=args.log_every,
+        reset_checkpoint=args.reset_checkpoint,
+        delete_checkpoint_on_success=args.delete_checkpoint_on_success,
+    )
+
+
 def build_panel(
     input_dir: Path,
     output_file: Path,
@@ -468,7 +529,7 @@ def build_panel(
 
     if reset_checkpoint and checkpoint_file.exists():
         checkpoint_file.unlink()
-        LOGGER.info("已删除旧 checkpoint: %s", checkpoint_file)
+        LOGGER.info("已删除旧 checkpoint：%s", checkpoint_file)
 
     checkpoint_rows = load_checkpoint(checkpoint_file)
     pending_files = [
@@ -510,9 +571,9 @@ def build_panel(
                     append_checkpoint_entry(checkpoint, file_key, row)
                     completed += 1
                     if completed == total or (log_every > 0 and completed % log_every == 0):
-                        LOGGER.info("已处理 %s/%s 份年报。", completed, total)
+                        LOGGER.info("已处理 %s/%s 份年报文本。", completed, total)
     else:
-        LOGGER.info("当前年份范围内的年报都已在 checkpoint 中，直接重建输出文件。")
+        LOGGER.info("当前年份范围内的年报文本均已在 checkpoint 中，直接重建输出文件。")
 
     output_rows = [checkpoint_rows[file_key] for file_key in report_keys if file_key in checkpoint_rows]
     write_output_files(output_rows, output_file, label_file)
@@ -521,14 +582,152 @@ def build_panel(
         checkpoint_file.unlink()
 
     elapsed = time.perf_counter() - start_time
-    LOGGER.info("面板数据已写入: %s", output_file)
+    LOGGER.info("面板数据已写入：%s", output_file)
     if label_file:
-        LOGGER.info("字段标签已写入: %s", label_file)
+        LOGGER.info("字段标签已写入：%s", label_file)
     if delete_checkpoint_on_success:
-        LOGGER.info("任务已完整结束，checkpoint 已删除: %s", checkpoint_file)
+        LOGGER.info("任务已完整结束，checkpoint 已删除：%s", checkpoint_file)
     else:
-        LOGGER.info("任务已完整结束，checkpoint 已保留: %s", checkpoint_file)
+        LOGGER.info("任务已完整结束，checkpoint 已保留：%s", checkpoint_file)
     LOGGER.info("全部完成，用时 %.2f 秒。", elapsed)
+
+
+def run_digital_transformation(
+    config: DigitalTransformationConfig,
+    *,
+    log_callback: LogCallback | None = None,
+    progress_callback: ProgressCallback | None = None,
+    cancel_requested: Callable[[], bool] | None = None,
+) -> DigitalTransformationResult:
+    start_time = time.perf_counter()
+    input_dir = config.input_dir
+    output_file = config.output_file
+    label_file = config.label_file
+    checkpoint_file = config.checkpoint_file
+    meta_file = config.meta_file
+    workers = config.workers
+    start_year = config.start_year
+    end_year = config.end_year
+    executor_type = config.executor_type
+    log_every = config.log_every
+    reset_checkpoint = config.reset_checkpoint
+    delete_checkpoint_on_success = config.delete_checkpoint_on_success
+
+    meta_map = load_company_meta(meta_file)
+    report_files = [
+        file_path
+        for file_path in iter_report_files(input_dir)
+        if file_in_year_range(file_path, start_year, end_year)
+    ]
+    if not report_files:
+        raise FileNotFoundError(
+            f"No report text files found in {input_dir} for {start_year}-{end_year}."
+        )
+
+    if reset_checkpoint and checkpoint_file.exists():
+        checkpoint_file.unlink()
+        emit_log(log_callback, "INFO", f"已删除旧 checkpoint：{checkpoint_file}")
+
+    checkpoint_rows = load_checkpoint(checkpoint_file)
+    pending_files = [
+        file_path
+        for file_path in report_files
+        if checkpoint_key(file_path) not in checkpoint_rows
+    ]
+    report_keys = {checkpoint_key(file_path) for file_path in report_files}
+
+    if workers is None:
+        workers = min(8, os.cpu_count() or 4)
+
+    emit_log(log_callback, "INFO", f"加载元数据 {len(meta_map)} 条。")
+    emit_log(log_callback, "INFO", f"已加载 checkpoint 结果 {len(checkpoint_rows)} 条。")
+    emit_log(
+        log_callback,
+        "INFO",
+        f"准备处理 {len(report_files)} 份年报文本，年份范围 {start_year}-{end_year}，"
+        f"执行器={executor_type}，workers={workers}，待处理={len(pending_files)}。",
+    )
+
+    worker = functools.partial(process_report, meta_map=meta_map)
+    max_workers = max(1, workers)
+    executor_cls = ThreadPoolExecutor if executor_type == "thread" else ProcessPoolExecutor
+    completed = len(checkpoint_rows)
+    total = len(report_files)
+
+    emit_progress(
+        progress_callback,
+        phase="prepare",
+        total=total,
+        completed=completed,
+        pending=len(pending_files),
+    )
+
+    if pending_files:
+        checkpoint_file.parent.mkdir(parents=True, exist_ok=True)
+        with checkpoint_file.open("a", encoding="utf-8") as checkpoint:
+            with executor_cls(max_workers=max_workers) as executor:
+                future_map = {
+                    executor.submit(worker, file_path): file_path for file_path in pending_files
+                }
+                for future in as_completed(future_map):
+                    if cancel_requested is not None and cancel_requested():
+                        for pending_future in future_map:
+                            pending_future.cancel()
+                        raise RuntimeError("digital transformation cancelled")
+
+                    file_path = future_map[future]
+                    row = future.result()
+                    file_key = checkpoint_key(file_path)
+                    checkpoint_rows[file_key] = row
+                    append_checkpoint_entry(checkpoint, file_key, row)
+                    completed += 1
+                    emit_progress(
+                        progress_callback,
+                        phase="process",
+                        total=total,
+                        completed=completed,
+                        pending=total - completed,
+                        current_file=str(file_path),
+                    )
+                    if completed == total or (log_every > 0 and completed % log_every == 0):
+                        emit_log(log_callback, "INFO", f"已处理 {completed}/{total} 份年报文本。")
+    else:
+        emit_log(log_callback, "INFO", "当前年份范围内的年报文本均已在 checkpoint 中，直接重建输出文件。")
+
+    output_rows = [checkpoint_rows[file_key] for file_key in report_keys if file_key in checkpoint_rows]
+    write_output_files(output_rows, output_file, label_file)
+
+    if delete_checkpoint_on_success and checkpoint_file.exists():
+        checkpoint_file.unlink()
+
+    elapsed = time.perf_counter() - start_time
+    emit_log(log_callback, "INFO", f"面板数据已写入：{output_file}")
+    if label_file:
+        emit_log(log_callback, "INFO", f"字段标签已写入：{label_file}")
+    if delete_checkpoint_on_success:
+        emit_log(log_callback, "INFO", f"任务已完整结束，checkpoint 已删除：{checkpoint_file}")
+    else:
+        emit_log(log_callback, "INFO", f"任务已完整结束，checkpoint 已保留：{checkpoint_file}")
+    emit_log(log_callback, "INFO", f"全部完成，用时 {elapsed:.2f} 秒。")
+    emit_progress(
+        progress_callback,
+        phase="done",
+        total=total,
+        completed=completed,
+        pending=0,
+        output_file=str(output_file),
+        label_file=str(label_file) if label_file else "",
+        checkpoint_file=str(checkpoint_file),
+    )
+    return DigitalTransformationResult(
+        output_file=output_file,
+        label_file=label_file,
+        checkpoint_file=checkpoint_file,
+        report_total=total,
+        pending_total=len(pending_files),
+        completed_total=completed,
+        elapsed_seconds=elapsed,
+    )
 
 
 def main() -> None:

@@ -21,7 +21,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass, asdict
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Callable
 from urllib.parse import urljoin
 
 import requests
@@ -100,6 +100,7 @@ AUTO_SPLIT_THRESHOLD = 12
 
 MIN_VALID_PDF_SIZE = 1024
 PDF_CHUNK_SIZE = 256 * 1024
+PERMANENT_DOWNLOAD_HTTP_STATUSES = {404, 410}
 AUDIT_SAMPLE_LIMIT = 50
 PDF_AUDIT_REPORT_NAME = "pdf_audit_report.json"
 PDF_AUDIT_AFTER_CLEANUP_REPORT_NAME = "pdf_audit_after_cleanup.json"
@@ -110,9 +111,84 @@ PRESERVED_NON_TARGET_CATEGORY = "same_year_no_target_sec_code"
 REPLACED_REPORTS_MANIFEST_NAME = "replaced_announcements.jsonl"
 REPLACED_REPORTS_METADATA_NAME = "replaced_metadata.csv"
 REPLACED_PDF_DIRNAME = "replaced_pdfs"
+DOWNLOAD_FAILURES_NAME = "download_failures.jsonl"
+LogCallback = Callable[[str, str], None]
+ProgressCallback = Callable[[dict[str, Any]], None]
+CancelCallback = Callable[[], bool]
+_cancel_requested_hook: CancelCallback | None = None
+
+
+@dataclass(slots=True)
+class SpiderConfig:
+    start_year: int = 2014
+    end_year: int = 2024
+    se_date: str | None = None
+    page_size: int = 30
+    request_interval: float = 0.2
+    announcement_concurrency: int = 8
+    download_concurrency: int = 8
+    output_dir: str = "annual_reports"
+    state_dir: str = "."
+    download_pdf: bool = False
+    metadata_only: bool = False
+    audit_pdf: bool = False
+    cleanup_orphan_pdf: bool = False
+
+
+@dataclass(slots=True)
+class SpiderResult:
+    mode: str
+    output_dir: Path
+    state_dir: Path
+    summary_path: Path | None
+    summary: list[dict[str, Any]] | None
+    elapsed_seconds: float
+
+
+@dataclass(slots=True)
+class PdfDownloadResult:
+    output_dir: Path
+    state_dir: Path
+    summary_path: Path | None
+    summary: list[dict[str, Any]] | None
+    elapsed_seconds: float
+    pdf_total: int
+    downloaded: int
+    exists: int
+    failed: int
+    skipped: int
+
+
+class SpiderCancelled(Exception):
+    """Raised when a GUI-driven spider task is cancelled."""
 
 
 # ==================== 工具函数 ====================
+
+def raise_if_cancelled() -> None:
+    if _cancel_requested_hook is not None and _cancel_requested_hook():
+        raise SpiderCancelled("spider cancelled")
+
+
+def sleep_with_cancel(seconds: float) -> None:
+    deadline = time.perf_counter() + max(seconds, 0.0)
+    while True:
+        raise_if_cancelled()
+        remaining = deadline - time.perf_counter()
+        if remaining <= 0:
+            return
+        time.sleep(min(0.2, remaining))
+
+
+async def async_sleep_with_cancel(seconds: float) -> None:
+    deadline = time.perf_counter() + max(seconds, 0.0)
+    while True:
+        raise_if_cancelled()
+        remaining = deadline - time.perf_counter()
+        if remaining <= 0:
+            return
+        await asyncio.sleep(min(0.2, remaining))
+
 
 def log(level: str, msg: str):
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -343,18 +419,6 @@ def write_json(path: Path, data: dict):
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     tmp.replace(path)
 
-
-def cleanup_checkpoint_file(state_dir: Path):
-    checkpoint_path = state_dir / "checkpoint.json"
-    try:
-        checkpoint_path.unlink()
-        log("INFO", f"已完整结束，自动删除断点文件: {checkpoint_path}")
-    except FileNotFoundError:
-        return
-    except Exception as e:
-        log("WARN", f"断点文件删除失败: {checkpoint_path} ({e})")
-
-
 def write_jsonl(path: Path, rows: list[Any]):
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as f:
@@ -383,6 +447,7 @@ class CninfoClient:
     def warmup(self):
         """预热：访问搜索页获取cookie"""
         try:
+            raise_if_cancelled()
             self.session.get(SEARCH_PAGE_URL, timeout=self.timeout)
         except Exception:
             pass
@@ -394,9 +459,11 @@ class CninfoClient:
 
         for attempt in range(1, 9):
             try:
+                raise_if_cancelled()
                 if self.request_interval > 0:
-                    time.sleep(self.request_interval + random.uniform(0, self.request_interval))
+                    sleep_with_cancel(self.request_interval + random.uniform(0, self.request_interval))
 
+                raise_if_cancelled()
                 resp = requests.post(
                     API_URL,
                     data=payload,
@@ -413,14 +480,14 @@ class CninfoClient:
                         return resp.json()
 
                 if resp.status_code in (403, 429) and attempt < 8:
-                    time.sleep(min(2 ** attempt, 20))
+                    sleep_with_cancel(min(2 ** attempt, 20))
                     continue
 
                 raise RuntimeError(f"HTTP {resp.status_code}")
             except Exception as e:
                 if attempt == 8:
                     raise RuntimeError(f"查询失败: {e}") from e
-                time.sleep(min(2 ** attempt, 20))
+                sleep_with_cancel(min(2 ** attempt, 20))
 
         raise RuntimeError("unreachable")
 
@@ -452,6 +519,7 @@ async def fetch_pages_batch(
     page_size: int,
     se_date: str,
 ) -> list[tuple[int, dict]]:
+    raise_if_cancelled()
     if announcement_session is None or aiohttp is None:
         tasks = [
             asyncio.to_thread(client.query_page, page, page_size, se_date)
@@ -479,23 +547,25 @@ async def query_page_async(
     payload = client.build_payload(page, page_size, se_date, searchkey)
     for attempt in range(1, 9):
         try:
+            raise_if_cancelled()
             if client.request_interval > 0:
-                await asyncio.sleep(client.request_interval + random.uniform(0, client.request_interval))
+                await async_sleep_with_cancel(client.request_interval + random.uniform(0, client.request_interval))
 
+            raise_if_cancelled()
             async with session.post(API_URL, data=payload) as resp:
                 if resp.status == 200:
                     text = await resp.text(encoding="utf-8")
                     return json.loads(text)
 
                 if resp.status in (403, 429) and attempt < 8:
-                    await asyncio.sleep(min(2 ** attempt, 20))
+                    await async_sleep_with_cancel(min(2 ** attempt, 20))
                     continue
 
                 raise RuntimeError(f"HTTP {resp.status}")
         except Exception as e:
             if attempt == 8:
                 raise RuntimeError(f"查询失败: {e}") from e
-            await asyncio.sleep(min(2 ** attempt, 20))
+            await async_sleep_with_cancel(min(2 ** attempt, 20))
 
     raise RuntimeError("unreachable")
 
@@ -532,7 +602,7 @@ async def fetch_announcements_for_year(
         query_ranges = saved_ranges
         resumed = True
         done = sum(1 for r in query_ranges if range_states.get(r, {}).get("completed"))
-        log("INFO", f"{report_year}年 检测到断点: {done}/{len(query_ranges)} 个区间已完成")
+        log("INFO", f"{report_year} 年检测到断点：{done}/{len(query_ranges)} 个区间已完成")
     else:
         # 清除旧缓存
         if cache_path.exists():
@@ -551,7 +621,7 @@ async def fetch_announcements_for_year(
 
     if not resumed:
         save_ck()
-        log("INFO", f"{report_year}年 开始抓取: {len(query_ranges)}个月级区间, seDate={se_date}")
+        log("INFO", f"{report_year} 年开始抓取：{len(query_ranges)} 个月级区间，seDate={se_date}")
 
     all_announcements: list[dict] = []
 
@@ -569,6 +639,7 @@ async def fetch_announcements_for_year(
 
     range_idx = 0
     while range_idx < len(query_ranges):
+        raise_if_cancelled()
         range_date = query_ranges[range_idx]
         rs = range_states.get(range_date, {})
 
@@ -636,15 +707,17 @@ async def fetch_announcements_for_year(
         duplicate_page_hit = False
         remaining_pages = list(range(last_page + 1, total_pages + 1))
         for page_batch in batched_pages(remaining_pages, announcement_concurrency):
+            raise_if_cancelled()
             batch_results = await fetch_pages_batch(client, announcement_session, page_batch, page_size, range_date)
 
             for page, data in batch_results:
+                raise_if_cancelled()
                 page_anns = data.get("announcements") or []
                 sig = page_signature(page_anns)
 
                 # 重复页检测（API在100页后可能回放）
                 if page > 1 and last_sig and sig == last_sig:
-                    await asyncio.sleep(2)
+                    await async_sleep_with_cancel(2)
                     if announcement_session is not None and aiohttp is not None:
                         retry_data = await query_page_async(client, announcement_session, page, page_size, range_date)
                     else:
@@ -1016,12 +1089,28 @@ def sync_year_outputs_with_replaced(
 
 # ==================== PDF下载 ====================
 
+class PermanentDownloadError(RuntimeError):
+    pass
+
+
 def get_pdf_target_path(output_dir: Path, item: ReportItem) -> Path:
     return output_dir / str(item.report_year) / item.filename
 
 
 def get_replaced_pdf_target_path(output_dir: Path, item: ReportItem) -> Path:
     return output_dir / str(item.report_year) / REPLACED_PDF_DIRNAME / item.filename
+
+
+def is_permanent_download_status(status: int) -> bool:
+    return status in PERMANENT_DOWNLOAD_HTTP_STATUSES
+
+
+def permanent_download_message(status: int) -> str:
+    return f"permanent HTTP {status}"
+
+
+def is_permanent_download_message(message: str) -> bool:
+    return str(message).startswith("permanent HTTP ")
 
 
 def _has_pdf_signature(path: Path) -> bool:
@@ -1305,6 +1394,57 @@ def report_item_to_dict(item: ReportItem) -> dict[str, Any]:
         "adjunct_url": item.adjunct_url,
         "expected_filename": item.filename,
     }
+
+
+def download_failure_key(role: str, item: ReportItem) -> tuple[str, str, str]:
+    return role, item.announcement_id, item.adjunct_url
+
+
+def download_failures_path(output_dir: Path, report_year: int) -> Path:
+    return output_dir / str(report_year) / DOWNLOAD_FAILURES_NAME
+
+
+def load_permanent_download_failures(output_dir: Path, years: set[int]) -> set[tuple[str, str, str]]:
+    failures: set[tuple[str, str, str]] = set()
+    for year in years:
+        for row in read_jsonl_rows(download_failures_path(output_dir, year)):
+            if not row.get("permanent"):
+                continue
+            failures.add((
+                str(row.get("role", "")),
+                str(row.get("announcement_id", "")),
+                str(row.get("adjunct_url", "")),
+            ))
+    return failures
+
+
+def append_permanent_download_failure(
+    output_dir: Path,
+    role: str,
+    item: ReportItem,
+    path: Path,
+    message: str,
+    existing_keys: set[tuple[str, str, str]],
+):
+    key = download_failure_key(role, item)
+    if key in existing_keys:
+        return
+
+    failure_path = download_failures_path(output_dir, item.report_year)
+    failure_path.parent.mkdir(parents=True, exist_ok=True)
+    record = {
+        **report_item_to_dict(item),
+        "role": role,
+        "permanent": True,
+        "error": message,
+        "pdf_url": item.pdf_url,
+        "target_path": str(path),
+        "failed_at": datetime.now().isoformat(timespec="seconds"),
+    }
+    with failure_path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(record, ensure_ascii=False))
+        f.write("\n")
+    existing_keys.add(key)
 
 
 def classify_non_target_pdf_record(output_dir: Path, path: Path, target_by_year_sec: dict[tuple[str, str], ReportItem]) -> dict[str, Any]:
@@ -1594,7 +1734,7 @@ def run_pdf_maintenance(args) -> bool:
         cleanup_report, audit_after_report = cleanup_orphan_pdfs(output_dir, audit_before_state)
         log(
             "INFO",
-            f"孤儿PDF清理完成: 删除={cleanup_report['deleted_pdf_count']}, 保留未删={cleanup_report['retained_non_target_pdf_count']}, 删除失败={cleanup_report['delete_error_count']}, 剩余可删孤儿={cleanup_report['remaining_orphan_count_after_delete']}",
+            f"孤儿 PDF 清理完成：删除={cleanup_report['deleted_pdf_count']}，保留未删={cleanup_report['retained_non_target_pdf_count']}，删除失败={cleanup_report['delete_error_count']}，剩余可删孤儿={cleanup_report['remaining_orphan_count_after_delete']}",
         )
         log("INFO", f"  清理报告: {output_dir / NON_TARGET_PDF_CLEANUP_REPORT_NAME}")
         log_pdf_audit_summary(audit_after_report, "清理后PDF审计结果")
@@ -1607,6 +1747,35 @@ def run_pdf_maintenance(args) -> bool:
     return True
 
 
+def merge_download_stats_into_summary(
+    summary_path: Path,
+    yearly_stats: dict[int, dict[str, int]],
+) -> list[dict[str, Any]] | None:
+    if not summary_path.exists():
+        return None
+    try:
+        payload = json.loads(summary_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not isinstance(payload, list):
+        return None
+
+    for row in payload:
+        if not isinstance(row, dict):
+            continue
+        try:
+            year = int(row.get("year"))
+        except Exception:
+            continue
+        stats = yearly_stats.get(year)
+        if stats is None:
+            continue
+        row.update(stats)
+
+    summary_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return payload
+
+
 def download_pdf_sync(url: str, path: Path, retries: int = 6) -> tuple[bool, str]:
     part_path, already_ready = _normalize_partial_download(path)
     if already_ready:
@@ -1614,6 +1783,7 @@ def download_pdf_sync(url: str, path: Path, retries: int = 6) -> tuple[bool, str
 
     for attempt in range(1, retries + 1):
         try:
+            raise_if_cancelled()
             resume_from = part_path.stat().st_size if part_path.exists() else 0
             headers = dict(DOWNLOAD_HEADERS)
             if resume_from > 0:
@@ -1628,6 +1798,8 @@ def download_pdf_sync(url: str, path: Path, retries: int = 6) -> tuple[bool, str
                     part_path.unlink(missing_ok=True)
                     raise RuntimeError(reason)
                 if resp.status_code not in (200, 206):
+                    if is_permanent_download_status(resp.status_code):
+                        raise PermanentDownloadError(permanent_download_message(resp.status_code))
                     raise RuntimeError(f"HTTP {resp.status_code}")
 
                 append_mode = resume_from > 0 and resp.status_code == 206
@@ -1638,6 +1810,7 @@ def download_pdf_sync(url: str, path: Path, retries: int = 6) -> tuple[bool, str
                 path.parent.mkdir(parents=True, exist_ok=True)
                 with part_path.open("ab" if append_mode else "wb") as f:
                     for chunk in resp.iter_content(chunk_size=PDF_CHUNK_SIZE):
+                        raise_if_cancelled()
                         if chunk:
                             f.write(chunk)
 
@@ -1647,10 +1820,13 @@ def download_pdf_sync(url: str, path: Path, retries: int = 6) -> tuple[bool, str
                 raise RuntimeError(reason)
             part_path.replace(path)
             return True, "downloaded"
+        except PermanentDownloadError as e:
+            part_path.unlink(missing_ok=True)
+            return False, str(e)
         except Exception as e:
             if attempt == retries:
                 return False, str(e)
-            time.sleep(min(2 ** attempt, 20))
+            sleep_with_cancel(min(2 ** attempt, 20))
     return False, "unreachable"
 
 
@@ -1663,12 +1839,14 @@ async def download_pdf_async(
 
     for attempt in range(1, retries + 1):
         try:
+            raise_if_cancelled()
             resume_from = part_path.stat().st_size if part_path.exists() else 0
             headers = dict(DOWNLOAD_HEADERS)
             if resume_from > 0:
                 headers["Range"] = f"bytes={resume_from}-"
 
             async with sem:
+                raise_if_cancelled()
                 if session is not None and aiohttp is not None:
                     async with session.get(url, headers=headers) as resp:
                         if resp.status == 416 and resume_from >= MIN_VALID_PDF_SIZE:
@@ -1679,6 +1857,8 @@ async def download_pdf_async(
                             part_path.unlink(missing_ok=True)
                             raise RuntimeError(reason)
                         if resp.status not in (200, 206):
+                            if is_permanent_download_status(resp.status):
+                                raise PermanentDownloadError(permanent_download_message(resp.status))
                             raise RuntimeError(f"HTTP {resp.status}")
 
                         append_mode = resume_from > 0 and resp.status == 206
@@ -1688,12 +1868,15 @@ async def download_pdf_async(
                         path.parent.mkdir(parents=True, exist_ok=True)
                         with part_path.open("ab" if append_mode else "wb") as f:
                             async for chunk in resp.content.iter_chunked(PDF_CHUNK_SIZE):
+                                raise_if_cancelled()
                                 if chunk:
                                     f.write(chunk)
                 else:
                     ok, msg = await asyncio.to_thread(download_pdf_sync, url, path, 1)
                     if ok:
                         return ok, msg
+                    if is_permanent_download_message(msg):
+                        raise PermanentDownloadError(msg)
                     raise RuntimeError(msg)
 
             ok, reason = _validate_pdf_artifact(part_path)
@@ -1702,10 +1885,13 @@ async def download_pdf_async(
                 raise RuntimeError(reason)
             part_path.replace(path)
             return True, "downloaded"
+        except PermanentDownloadError as e:
+            part_path.unlink(missing_ok=True)
+            return False, str(e)
         except Exception as e:
             if attempt == retries:
                 return False, str(e)
-            await asyncio.sleep(min(2 ** attempt, 20))
+            await async_sleep_with_cancel(min(2 ** attempt, 20))
 
     return False, "unreachable"
 
@@ -1830,6 +2016,8 @@ async def _download_with_role_info(
     role: str,
 ):
     ok, msg = await download_pdf_async(session, item.pdf_url, path, sem)
+    if not ok:
+        msg = f"{msg}; announcement_id={item.announcement_id}; url={item.pdf_url}"
     return role, item, path, ok, msg
 
 
@@ -1845,6 +2033,8 @@ def build_year_result(
 ) -> dict[str, Any]:
     main_stats = main_stats or {"downloaded": 0, "exists": 0, "failed": 0}
     replaced_stats = replaced_stats or {"downloaded": 0, "exists": 0, "failed": 0}
+    main_skipped = main_stats.get("skipped", 0)
+    replaced_skipped = replaced_stats.get("skipped", 0)
     return {
         "year": report_year,
         "raw_total": len(announcements),
@@ -1854,9 +2044,11 @@ def build_year_result(
         "downloaded": main_stats["downloaded"] + replaced_stats["downloaded"],
         "exists": main_stats["exists"] + replaced_stats["exists"],
         "failed": main_stats["failed"] + replaced_stats["failed"],
+        "skipped": main_skipped + replaced_skipped,
         "replaced_downloaded": replaced_stats["downloaded"],
         "replaced_exists": replaced_stats["exists"],
         "replaced_failed": replaced_stats["failed"],
+        "replaced_skipped": replaced_skipped,
         "filtered_paths": artifacts.filtered_paths,
         "filtered_out_paths": artifacts.filtered_out_paths,
         "replaced_paths": artifacts.replaced_paths,
@@ -1901,7 +2093,7 @@ async def process_year_with_replaced(
     if metadata_only:
         log(
             "INFO",
-            f"{report_year}年仅抓取公告: 原始公告={len(announcements)}, 保留={len(reports)}, 更新前版本={len(replaced_reports)}, 过滤={len(filtered_out)}",
+            f"{report_year} 年仅抓取公告：原始公告={len(announcements)}，保留={len(reports)}，更新前版本={len(replaced_reports)}，过滤={len(filtered_out)}",
         )
         return build_year_result(
             report_year,
@@ -1936,7 +2128,7 @@ async def process_year_with_replaced(
 
     log(
         "INFO",
-        f"{report_year}年开始下载: 主版本{len(primary_reports)}份, 更新前版本{len(archived_reports)}份",
+        f"{report_year} 年开始下载：主版本 {len(primary_reports)} 份，更新前版本 {len(archived_reports)} 份",
     )
 
     log("INFO", f"{report_year}年下载前预检查：正在核对已存在PDF、断点文件和目录归位")
@@ -1950,9 +2142,10 @@ async def process_year_with_replaced(
     path_map: dict[str, Path] = {}
     archived_path_map: dict[str, Path] = {}
     stats = {
-        "main": {"downloaded": 0, "exists": 0, "failed": 0},
-        "replaced": {"downloaded": 0, "exists": 0, "failed": 0},
+        "main": {"downloaded": 0, "exists": 0, "failed": 0, "skipped": 0},
+        "replaced": {"downloaded": 0, "exists": 0, "failed": 0, "skipped": 0},
     }
+    permanent_failure_keys = load_permanent_download_failures(output_dir, touched_years)
 
     for role, items, target_fn, role_path_map in (
         ("main", primary_reports, get_pdf_target_path, path_map),
@@ -1974,7 +2167,15 @@ async def process_year_with_replaced(
                 stats[role]["exists"] += 1
                 continue
 
-            role_path_map[item.announcement_id] = target_path
+            if download_failure_key(role, item) in permanent_failure_keys:
+                stats[role]["skipped"] += 1
+                log(
+                    "WARN",
+                    f"{report_year} 年跳过永久失败 [{role}]：{item.sec_code} {item.sec_name} | "
+                    f"{item.announcement_title} | announcement_id={item.announcement_id}",
+                )
+                continue
+
             tasks.append(
                 asyncio.create_task(
                     _download_with_role_info(download_session, item, target_path, download_sem, role)
@@ -1983,7 +2184,8 @@ async def process_year_with_replaced(
 
     log(
         "INFO",
-        f"{report_year}年预检查完成：主版本已存在{stats['main']['exists']}份，旧版本已存在{stats['replaced']['exists']}份，待下载{len(tasks)}份",
+        f"{report_year} 年预检查完成：主版本已存在 {stats['main']['exists']} 份，旧版本已存在 {stats['replaced']['exists']} 份，"
+        f"永久失败跳过 {stats['main']['skipped'] + stats['replaced']['skipped']} 份，待下载 {len(tasks)} 份",
     )
 
     finished = 0
@@ -2003,10 +2205,25 @@ async def process_year_with_replaced(
             log("INFO", f"{report_year}年下载成功 {progress} [{role}]: {item.sec_code} {item.sec_name} | {item.announcement_title}")
         elif ok and msg == "exists":
             stats[role]["exists"] += 1
+            if role == "main":
+                path_map[item.announcement_id] = path
+            else:
+                archived_path_map[item.announcement_id] = path
             log("INFO", f"{report_year}年已存在 {progress} [{role}]: {item.sec_code} {item.sec_name}")
+        elif is_permanent_download_message(msg):
+            stats[role]["skipped"] += 1
+            append_permanent_download_failure(
+                output_dir,
+                role,
+                item,
+                path,
+                msg,
+                permanent_failure_keys,
+            )
+            log("WARN", f"{report_year}年远端PDF不可用，已记录并跳过 {progress} [{role}]: {item.sec_code} {item.sec_name} | {msg}")
         else:
             stats[role]["failed"] += 1
-            log("ERROR", f"{report_year}年下载失败 {progress} [{role}]: {item.sec_code} {item.sec_name} | {msg}")
+            log("ERROR", f"{report_year} 年下载失败 {progress} [{role}]：{item.sec_code} {item.sec_name} | {msg}")
 
     main_reports_by_year: dict[int, list[ReportItem]] = {}
     main_path_maps_by_year: dict[int, dict[str, Path]] = {}
@@ -2071,9 +2288,9 @@ async def process_year_with_replaced(
 
     log(
         "INFO",
-        f"{report_year}年完成: 原始公告={len(announcements)}, 保留={len(reports)}, 更新前版本={len(replaced_reports)}, 过滤={len(filtered_out)}, "
-        f"主版本下载={stats['main']['downloaded']}, 主版本已存在={stats['main']['exists']}, 主版本失败={stats['main']['failed']}, "
-        f"旧版本下载={stats['replaced']['downloaded']}, 旧版本已存在={stats['replaced']['exists']}, 旧版本失败={stats['replaced']['failed']}",
+        f"{report_year} 年完成：原始公告={len(announcements)}，保留={len(reports)}，更新前版本={len(replaced_reports)}，过滤={len(filtered_out)}，"
+        f"主版本下载={stats['main']['downloaded']}，主版本已存在={stats['main']['exists']}，主版本跳过={stats['main']['skipped']}，主版本失败={stats['main']['failed']}，"
+        f"旧版本下载={stats['replaced']['downloaded']}，旧版本已存在={stats['replaced']['exists']}，旧版本跳过={stats['replaced']['skipped']}，旧版本失败={stats['replaced']['failed']}",
     )
     return build_year_result(
         report_year,
@@ -2104,14 +2321,14 @@ async def async_main(args):
 
     client = CninfoClient(timeout=40.0, request_interval=args.request_interval)
     if args.se_date:
-        log("INFO", f"{report_year_range_label}年报使用自定义抓取窗口: {args.se_date}")
+        log("INFO", f"{report_year_range_label} 年报使用自定义抓取窗口：{args.se_date}")
         if args.start_year != args.end_year:
             log("INFO", "说明: 当前自定义 se-date 会应用到每个年份任务，不会按年份自动展开默认窗口。")
     else:
         if args.start_year == args.end_year:
-            log("INFO", f"{args.start_year}年报默认抓取窗口: {overall_default_se_date}")
+            log("INFO", f"{args.start_year} 年报默认抓取窗口：{overall_default_se_date}")
         else:
-            log("INFO", f"{report_year_range_label}年报默认抓取窗口整体覆盖: {overall_default_se_date}")
+            log("INFO", f"{report_year_range_label} 年报默认抓取窗口整体覆盖：{overall_default_se_date}")
             log(
                 "INFO",
                 f"按年执行窗口: {args.start_year}年->{per_year_default_dates[args.start_year]} | "
@@ -2126,8 +2343,9 @@ async def async_main(args):
 
     async def run_years(announcement_session, download_session):
         for year in range(args.start_year, args.end_year + 1):
+            raise_if_cancelled()
             se_date = args.se_date or default_se_date(year)
-            log("INFO", f"\n{'='*50} {year}年年报 {'='*50}")
+            log("INFO", f"\n{'='*50} {year} 年年报 {'='*50}")
             result = await process_year_with_replaced(
                 client=client,
                 announcement_session=announcement_session,
@@ -2149,7 +2367,7 @@ async def async_main(args):
             summary.append(result)
 
     if not download_pdf:
-        log("INFO", "当前默认只抓取 announcement，PDF 下载已关闭。")
+        log("INFO", "当前模式仅抓取 announcement，PDF 下载已关闭。")
         if aiohttp is None:
             await run_years(announcement_session=None, download_session=None)
         else:
@@ -2167,17 +2385,16 @@ async def async_main(args):
         summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
 
         log("INFO", "\n" + "=" * 60)
-        log("INFO", "全部完成，汇总如下")
+        log("INFO", "全部完成，汇总如下：")
         total_raw = sum(r.get("raw_total", 0) for r in summary)
         total_filtered = sum(r.get("filtered_total", 0) for r in summary)
         total_filtered_out = sum(r.get("filtered_out_total", 0) for r in summary)
         log("INFO", f"  原始公告总数: {total_raw}")
         log("INFO", f"  筛选后年报数: {total_filtered}")
         log("INFO", f"  被过滤公告数: {total_filtered_out}")
-        log("INFO", f"  输出目录: {output_dir}")
-        log("INFO", f"  汇总文件: {summary_path}")
+        log("INFO", f"  输出目录：{output_dir}")
+        log("INFO", f"  汇总文件：{summary_path}")
         log("INFO", "=" * 60)
-        cleanup_checkpoint_file(state_dir)
         return
 
     if aiohttp is None:
@@ -2201,21 +2418,21 @@ async def async_main(args):
     summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
 
     log("INFO", "\n" + "=" * 60)
-    log("INFO", "全部完成！汇总:")
+    log("INFO", "全部完成，汇总如下：")
     total_raw = sum(r.get("raw_total", 0) for r in summary)
     total_filtered = sum(r.get("filtered_total", 0) for r in summary)
     total_filtered_out = sum(r.get("filtered_out_total", 0) for r in summary)
     total_dl = sum(r.get("downloaded", 0) for r in summary)
     total_ex = sum(r.get("exists", 0) for r in summary)
     total_fail = sum(r.get("failed", 0) for r in summary)
-    log("INFO", f"  原始公告总数: {total_raw}")
-    log("INFO", f"  保留公告总数: {total_filtered}")
-    log("INFO", f"  被过滤公告总数: {total_filtered_out}")
-    log("INFO", f"  新下载: {total_dl}, 已存在: {total_ex}, 失败: {total_fail}")
-    log("INFO", f"  输出目录: {output_dir}")
-    log("INFO", f"  汇总文件: {summary_path}")
+    total_skip = sum(r.get("skipped", 0) for r in summary)
+    log("INFO", f"  原始公告总数：{total_raw}")
+    log("INFO", f"  保留公告总数：{total_filtered}")
+    log("INFO", f"  被过滤公告总数：{total_filtered_out}")
+    log("INFO", f"  新下载：{total_dl}，已存在：{total_ex}，永久失败跳过：{total_skip}，失败：{total_fail}")
+    log("INFO", f"  输出目录：{output_dir}")
+    log("INFO", f"  汇总文件：{summary_path}")
     log("INFO", "=" * 60)
-    cleanup_checkpoint_file(state_dir)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -2262,6 +2479,658 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     return p
+
+
+def namespace_from_spider_config(config: SpiderConfig) -> argparse.Namespace:
+    return argparse.Namespace(
+        start_year=config.start_year,
+        end_year=config.end_year,
+        se_date=config.se_date,
+        page_size=config.page_size,
+        request_interval=config.request_interval,
+        announcement_concurrency=config.announcement_concurrency,
+        download_concurrency=config.download_concurrency,
+        output_dir=config.output_dir,
+        state_dir=config.state_dir,
+        download_pdf=config.download_pdf,
+        metadata_only=config.metadata_only,
+        audit_pdf=config.audit_pdf,
+        cleanup_orphan_pdf=config.cleanup_orphan_pdf,
+    )
+
+
+def build_spider_config_from_args(args: argparse.Namespace) -> SpiderConfig:
+    return SpiderConfig(
+        start_year=args.start_year,
+        end_year=args.end_year,
+        se_date=args.se_date,
+        page_size=args.page_size,
+        request_interval=args.request_interval,
+        announcement_concurrency=args.announcement_concurrency,
+        download_concurrency=args.download_concurrency,
+        output_dir=args.output_dir,
+        state_dir=args.state_dir,
+        download_pdf=args.download_pdf,
+        metadata_only=args.metadata_only,
+        audit_pdf=args.audit_pdf,
+        cleanup_orphan_pdf=args.cleanup_orphan_pdf,
+    )
+
+
+async def run_spider_service(
+    config: SpiderConfig,
+    *,
+    log_callback: LogCallback | None = None,
+    progress_callback: ProgressCallback | None = None,
+    cancel_requested: Callable[[], bool] | None = None,
+    console_log: bool = True,
+) -> SpiderResult:
+    global _cancel_requested_hook
+    args = namespace_from_spider_config(config)
+    if args.start_year > args.end_year:
+        raise ValueError("start-year > end-year")
+
+    start_time = time.perf_counter()
+    output_dir = Path(args.output_dir)
+    state_dir = Path(args.state_dir)
+    summary_path = output_dir / "summary.json"
+
+    original_log = globals()["log"]
+    original_cancel_hook = _cancel_requested_hook
+    _cancel_requested_hook = cancel_requested
+
+    def bridged_log(level: str, msg: str):
+        if console_log:
+            original_log(level, msg)
+        if log_callback is not None:
+            log_callback(level, msg)
+        if progress_callback is not None:
+            progress_callback({"phase": "log", "message": msg, "level": level})
+        if cancel_requested is not None and cancel_requested():
+            raise SpiderCancelled("spider cancelled")
+
+    globals()["log"] = bridged_log
+    try:
+        if run_pdf_maintenance(args):
+            elapsed = time.perf_counter() - start_time
+            return SpiderResult(
+                mode="maintenance",
+                output_dir=output_dir,
+                state_dir=state_dir,
+                summary_path=summary_path if summary_path.exists() else None,
+                summary=None,
+                elapsed_seconds=elapsed,
+            )
+
+        await async_main(args)
+        summary = None
+        if summary_path.exists():
+            try:
+                summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            except Exception:
+                summary = None
+        elapsed = time.perf_counter() - start_time
+        if progress_callback is not None:
+            progress_callback(
+                {
+                    "phase": "done",
+                    "summary_path": str(summary_path) if summary_path.exists() else "",
+                    "elapsed_seconds": elapsed,
+                }
+            )
+        return SpiderResult(
+            mode="download" if args.download_pdf and not args.metadata_only else "metadata",
+            output_dir=output_dir,
+            state_dir=state_dir,
+            summary_path=summary_path if summary_path.exists() else None,
+            summary=summary if isinstance(summary, list) else None,
+            elapsed_seconds=elapsed,
+        )
+    finally:
+        _cancel_requested_hook = original_cancel_hook
+        globals()["log"] = original_log
+
+
+async def run_pdf_download_service(
+    config: SpiderConfig,
+    *,
+    log_callback: LogCallback | None = None,
+    progress_callback: ProgressCallback | None = None,
+    cancel_requested: Callable[[], bool] | None = None,
+    console_log: bool = True,
+) -> PdfDownloadResult:
+    global _cancel_requested_hook
+
+    start_time = time.perf_counter()
+    output_dir = Path(config.output_dir)
+    state_dir = Path(config.state_dir)
+    summary_path = output_dir / "summary.json"
+
+    if not output_dir.exists():
+        raise FileNotFoundError(f"输出目录不存在: {output_dir}")
+
+    original_log = globals()["log"]
+    original_cancel_hook = _cancel_requested_hook
+    _cancel_requested_hook = cancel_requested
+
+    def bridged_log(level: str, msg: str):
+        if console_log:
+            original_log(level, msg)
+        if log_callback is not None:
+            log_callback(level, msg)
+        if progress_callback is not None:
+            progress_callback({"phase": "log", "message": msg, "level": level})
+        if cancel_requested is not None and cancel_requested():
+            raise SpiderCancelled("pdf download cancelled")
+
+    globals()["log"] = bridged_log
+    try:
+        return await _run_pdf_download_service_impl(
+            config=config,
+            output_dir=output_dir,
+            state_dir=state_dir,
+            summary_path=summary_path,
+            progress_callback=progress_callback,
+        )
+        target_items = load_target_reports_from_output_dir(output_dir)
+        replaced_items = load_replaced_reports_from_output_dir(output_dir)
+        pdf_total = len(target_items) + len(replaced_items)
+
+        if pdf_total == 0:
+            raise FileNotFoundError(f"未找到可下载清单: {output_dir}")
+
+        touched_years = {item.report_year for item in target_items}
+        touched_years.update(item.report_year for item in replaced_items)
+        pdf_locator_cache = build_pdf_locator_cache_for_items(output_dir, target_items + replaced_items)
+        permanent_failure_keys = load_permanent_download_failures(output_dir, touched_years)
+        download_sem = asyncio.Semaphore(max(1, int(config.download_concurrency)))
+
+        path_map: dict[str, Path] = {}
+        archived_path_map: dict[str, Path] = {}
+        aggregate = {"downloaded": 0, "exists": 0, "failed": 0, "skipped": 0}
+        yearly_stats: dict[int, dict[str, int]] = {
+            year: {"downloaded": 0, "exists": 0, "failed": 0, "skipped": 0}
+            for year in touched_years
+        }
+        pending_downloads: list[tuple[str, ReportItem, Path]] = []
+
+        for role, items, target_fn, role_path_map in (
+            ("main", target_items, get_pdf_target_path, path_map),
+            ("replaced", replaced_items, get_replaced_pdf_target_path, archived_path_map),
+        ):
+            for item in items:
+                raise_if_cancelled()
+                existing_path = find_existing_pdf_path(output_dir, item, pdf_locator_cache)
+                target_path = target_fn(output_dir, item)
+                if existing_path is not None:
+                    final_path = relocate_existing_pdf(existing_path, target_path)
+                    update_pdf_locator_after_relocation(
+                        output_dir,
+                        item.report_year,
+                        existing_path,
+                        final_path,
+                        pdf_locator_cache,
+                    )
+                    role_path_map[item.announcement_id] = final_path
+                    aggregate["exists"] += 1
+                    yearly_stats[item.report_year]["exists"] += 1
+                    continue
+
+                if download_failure_key(role, item) in permanent_failure_keys:
+                    aggregate["skipped"] += 1
+                    yearly_stats[item.report_year]["skipped"] += 1
+                    log(
+                        "WARN",
+                        f"{item.report_year} 年跳过永久失败 [{role}]：{item.sec_code} {item.sec_name} | "
+                        f"{item.announcement_title} | announcement_id={item.announcement_id}",
+                    )
+                    continue
+
+                pending_downloads.append((role, item, target_path))
+
+        if progress_callback is not None:
+            progress_callback(
+                {
+                    "phase": "prepare",
+                    "pdf_total": pdf_total,
+                    "total": len(pending_downloads),
+                    "completed": 0,
+                    "downloaded": 0,
+                    "exists": aggregate["exists"],
+                    "failed": 0,
+                    "skipped": aggregate["skipped"],
+                }
+            )
+
+        log("INFO", f"PDF 下载阶段开始：目标 {pdf_total} 份，待下载 {len(tasks)} 份")
+
+        if pending_downloads:
+            if aiohttp is None:
+                log("WARN", "未安装 aiohttp，PDF 下载退化为 requests 线程模式")
+                session_cm = None
+            else:
+                timeout = aiohttp.ClientTimeout(total=120)
+                dl_connector = aiohttp.TCPConnector(limit=max(32, int(config.download_concurrency) * 4))
+                session_cm = aiohttp.ClientSession(timeout=timeout, connector=dl_connector)
+
+            async def run_tasks(download_session):
+                finished = 0
+                total = len(tasks)
+                for coro in asyncio.as_completed(tasks):
+                    raise_if_cancelled()
+                    role, item, path, ok, msg = await coro
+                    finished += 1
+                    if ok:
+                        register_pdf_locator_path(output_dir, item.report_year, path, pdf_locator_cache)
+                    if ok and msg == "downloaded":
+                        aggregate["downloaded"] += 1
+                        yearly_stats[item.report_year]["downloaded"] += 1
+                        if role == "main":
+                            path_map[item.announcement_id] = path
+                        else:
+                            archived_path_map[item.announcement_id] = path
+                        log("INFO", f"{item.report_year}年下载成功 [{finished}/{total}] [{role}]：{item.sec_code} {item.sec_name}")
+                    elif ok and msg == "exists":
+                        aggregate["exists"] += 1
+                        yearly_stats[item.report_year]["exists"] += 1
+                        if role == "main":
+                            path_map[item.announcement_id] = path
+                        else:
+                            archived_path_map[item.announcement_id] = path
+                    elif is_permanent_download_message(msg):
+                        aggregate["skipped"] += 1
+                        yearly_stats[item.report_year]["skipped"] += 1
+                        append_permanent_download_failure(
+                            output_dir,
+                            role,
+                            item,
+                            path,
+                            msg,
+                            permanent_failure_keys,
+                        )
+                        log("WARN", f"{item.report_year}年远端PDF不可用 [{finished}/{total}] [{role}]：{item.sec_code} {item.sec_name}")
+                    else:
+                        aggregate["failed"] += 1
+                        yearly_stats[item.report_year]["failed"] += 1
+                        log("ERROR", f"{item.report_year}年下载失败 [{finished}/{total}] [{role}]：{item.sec_code} {item.sec_name} | {msg}")
+
+                    if progress_callback is not None:
+                        progress_callback(
+                            {
+                                "phase": "download",
+                                "pdf_total": pdf_total,
+                                "total": total,
+                                "completed": finished,
+                                "downloaded": aggregate["downloaded"],
+                                "exists": aggregate["exists"],
+                                "failed": aggregate["failed"],
+                                "skipped": aggregate["skipped"],
+                                "current_title": item.announcement_title,
+                                "current_code": item.sec_code,
+                            }
+                        )
+
+            if session_cm is None:
+                await run_tasks(None)
+            else:
+                async with session_cm as session:
+                    real_tasks: list[asyncio.Task] = []
+                    for task in tasks:
+                        task.cancel()
+                    tasks = []
+                    for role, items, target_fn, _role_path_map in (
+                        ("main", target_items, get_pdf_target_path, path_map),
+                        ("replaced", replaced_items, get_replaced_pdf_target_path, archived_path_map),
+                    ):
+                        for item in items:
+                            existing_path = find_existing_pdf_path(output_dir, item, pdf_locator_cache)
+                            target_path = target_fn(output_dir, item)
+                            if existing_path is None and download_failure_key(role, item) not in permanent_failure_keys:
+                                real_tasks.append(
+                                    asyncio.create_task(
+                                        _download_with_role_info(session, item, target_path, download_sem, role)
+                                    )
+                                )
+                    tasks = real_tasks
+                    await run_tasks(session)
+
+        main_reports_by_year: dict[int, list[ReportItem]] = {}
+        main_path_maps_by_year: dict[int, dict[str, Path]] = {}
+
+        for filtered_path in sorted(output_dir.glob("*/filtered_announcements.jsonl")):
+            year_reports = load_report_items(filtered_path)
+            metadata_path = filtered_path.parent / "metadata.csv"
+            year_path_map: dict[str, Path] = {}
+            for item in year_reports:
+                if item.announcement_id in path_map:
+                    year_path_map[item.announcement_id] = path_map[item.announcement_id]
+                    continue
+                existing_path = find_existing_pdf_path(output_dir, item, pdf_locator_cache)
+                if existing_path is not None:
+                    target_path = get_pdf_target_path(output_dir, item)
+                    final_path = relocate_existing_pdf(existing_path, target_path)
+                    update_pdf_locator_after_relocation(
+                        output_dir,
+                        item.report_year,
+                        existing_path,
+                        final_path,
+                        pdf_locator_cache,
+                    )
+                    year_path_map[item.announcement_id] = final_path
+            _write_metadata_csv(metadata_path, year_reports, year_path_map)
+            year_value = int(filtered_path.parent.name)
+            main_reports_by_year[year_value] = year_reports
+            main_path_maps_by_year[year_value] = year_path_map
+
+        for replaced_path in sorted(output_dir.glob(f"*/{REPLACED_REPORTS_MANIFEST_NAME}")):
+            year_reports = load_report_items(replaced_path)
+            metadata_path = replaced_path.parent / REPLACED_REPORTS_METADATA_NAME
+            year_path_map: dict[str, Path] = {}
+            for item in year_reports:
+                if item.announcement_id in archived_path_map:
+                    year_path_map[item.announcement_id] = archived_path_map[item.announcement_id]
+                    continue
+                existing_path = find_existing_pdf_path(output_dir, item, pdf_locator_cache)
+                if existing_path is not None:
+                    target_path = get_replaced_pdf_target_path(output_dir, item)
+                    final_path = relocate_existing_pdf(existing_path, target_path)
+                    update_pdf_locator_after_relocation(
+                        output_dir,
+                        item.report_year,
+                        existing_path,
+                        final_path,
+                        pdf_locator_cache,
+                    )
+                    year_path_map[item.announcement_id] = final_path
+            year_value = int(replaced_path.parent.name)
+            _write_replaced_metadata_csv(
+                metadata_path,
+                year_reports,
+                year_path_map,
+                main_reports_by_year.get(year_value, []),
+                main_path_maps_by_year.get(year_value, {}),
+            )
+
+        merged_summary = merge_download_stats_into_summary(summary_path, yearly_stats)
+        elapsed = time.perf_counter() - start_time
+        if progress_callback is not None:
+            progress_callback(
+                {
+                    "phase": "done",
+                    "elapsed_seconds": elapsed,
+                    "pdf_total": pdf_total,
+                    "downloaded": aggregate["downloaded"],
+                    "exists": aggregate["exists"],
+                    "failed": aggregate["failed"],
+                    "skipped": aggregate["skipped"],
+                }
+            )
+
+        return PdfDownloadResult(
+            output_dir=output_dir,
+            state_dir=state_dir,
+            summary_path=summary_path if summary_path.exists() else None,
+            summary=merged_summary,
+            elapsed_seconds=elapsed,
+            pdf_total=pdf_total,
+            downloaded=aggregate["downloaded"],
+            exists=aggregate["exists"],
+            failed=aggregate["failed"],
+            skipped=aggregate["skipped"],
+        )
+    finally:
+        _cancel_requested_hook = original_cancel_hook
+        globals()["log"] = original_log
+
+
+async def _run_pdf_download_service_impl(
+    *,
+    config: SpiderConfig,
+    output_dir: Path,
+    state_dir: Path,
+    summary_path: Path,
+    progress_callback: ProgressCallback | None,
+) -> PdfDownloadResult:
+    start_time = time.perf_counter()
+
+    if not output_dir.exists():
+        raise FileNotFoundError(f"输出目录不存在: {output_dir}")
+
+    target_items = load_target_reports_from_output_dir(output_dir)
+    replaced_items = load_replaced_reports_from_output_dir(output_dir)
+    pdf_total = len(target_items) + len(replaced_items)
+    if pdf_total == 0:
+        raise FileNotFoundError(f"未找到可下载清单: {output_dir}")
+
+    touched_years = {item.report_year for item in target_items}
+    touched_years.update(item.report_year for item in replaced_items)
+    pdf_locator_cache = build_pdf_locator_cache_for_items(output_dir, target_items + replaced_items)
+    permanent_failure_keys = load_permanent_download_failures(output_dir, touched_years)
+    download_sem = asyncio.Semaphore(max(1, int(config.download_concurrency)))
+
+    path_map: dict[str, Path] = {}
+    archived_path_map: dict[str, Path] = {}
+    aggregate = {"downloaded": 0, "exists": 0, "failed": 0, "skipped": 0}
+    yearly_stats: dict[int, dict[str, int]] = {
+        year: {"downloaded": 0, "exists": 0, "failed": 0, "skipped": 0}
+        for year in touched_years
+    }
+    pending_downloads: list[tuple[str, ReportItem, Path]] = []
+
+    for role, items, target_fn, role_path_map in (
+        ("main", target_items, get_pdf_target_path, path_map),
+        ("replaced", replaced_items, get_replaced_pdf_target_path, archived_path_map),
+    ):
+        for item in items:
+            raise_if_cancelled()
+            existing_path = find_existing_pdf_path(output_dir, item, pdf_locator_cache)
+            target_path = target_fn(output_dir, item)
+            if existing_path is not None:
+                final_path = relocate_existing_pdf(existing_path, target_path)
+                update_pdf_locator_after_relocation(
+                    output_dir,
+                    item.report_year,
+                    existing_path,
+                    final_path,
+                    pdf_locator_cache,
+                )
+                role_path_map[item.announcement_id] = final_path
+                aggregate["exists"] += 1
+                yearly_stats[item.report_year]["exists"] += 1
+                continue
+
+            if download_failure_key(role, item) in permanent_failure_keys:
+                aggregate["skipped"] += 1
+                yearly_stats[item.report_year]["skipped"] += 1
+                log(
+                    "WARN",
+                    f"{item.report_year} 年跳过永久失败 [{role}]：{item.sec_code} {item.sec_name} | "
+                    f"{item.announcement_title} | announcement_id={item.announcement_id}",
+                )
+                continue
+
+            pending_downloads.append((role, item, target_path))
+
+    if progress_callback is not None:
+        progress_callback(
+            {
+                "phase": "prepare",
+                "pdf_total": pdf_total,
+                "total": len(pending_downloads),
+                "completed": 0,
+                "downloaded": 0,
+                "exists": aggregate["exists"],
+                "failed": 0,
+                "skipped": aggregate["skipped"],
+            }
+        )
+
+    log("INFO", f"PDF 下载阶段开始：目标 {pdf_total} 份，待下载 {len(pending_downloads)} 份")
+
+    async def run_tasks(download_session) -> None:
+        tasks = [
+            asyncio.create_task(
+                _download_with_role_info(download_session, item, target_path, download_sem, role)
+            )
+            for role, item, target_path in pending_downloads
+        ]
+        finished = 0
+        total = len(tasks)
+        try:
+            for coro in asyncio.as_completed(tasks):
+                raise_if_cancelled()
+                role, item, path, ok, msg = await coro
+                finished += 1
+                if ok:
+                    register_pdf_locator_path(output_dir, item.report_year, path, pdf_locator_cache)
+                if ok and msg == "downloaded":
+                    aggregate["downloaded"] += 1
+                    yearly_stats[item.report_year]["downloaded"] += 1
+                    if role == "main":
+                        path_map[item.announcement_id] = path
+                    else:
+                        archived_path_map[item.announcement_id] = path
+                    log("INFO", f"{item.report_year}年下载成功 [{finished}/{total}] [{role}]：{item.sec_code} {item.sec_name}")
+                elif ok and msg == "exists":
+                    aggregate["exists"] += 1
+                    yearly_stats[item.report_year]["exists"] += 1
+                    if role == "main":
+                        path_map[item.announcement_id] = path
+                    else:
+                        archived_path_map[item.announcement_id] = path
+                elif is_permanent_download_message(msg):
+                    aggregate["skipped"] += 1
+                    yearly_stats[item.report_year]["skipped"] += 1
+                    append_permanent_download_failure(
+                        output_dir,
+                        role,
+                        item,
+                        path,
+                        msg,
+                        permanent_failure_keys,
+                    )
+                    log("WARN", f"{item.report_year}年远端PDF不可用 [{finished}/{total}] [{role}]：{item.sec_code} {item.sec_name}")
+                else:
+                    aggregate["failed"] += 1
+                    yearly_stats[item.report_year]["failed"] += 1
+                    log("ERROR", f"{item.report_year}年下载失败 [{finished}/{total}] [{role}]：{item.sec_code} {item.sec_name} | {msg}")
+
+                if progress_callback is not None:
+                    progress_callback(
+                        {
+                            "phase": "download",
+                            "pdf_total": pdf_total,
+                            "total": total,
+                            "completed": finished,
+                            "downloaded": aggregate["downloaded"],
+                            "exists": aggregate["exists"],
+                            "failed": aggregate["failed"],
+                            "skipped": aggregate["skipped"],
+                            "current_title": item.announcement_title,
+                            "current_code": item.sec_code,
+                        }
+                    )
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+
+    if pending_downloads:
+        if aiohttp is None:
+            log("WARN", "未安装 aiohttp，PDF 下载退化为 requests 线程模式")
+            await run_tasks(None)
+        else:
+            timeout = aiohttp.ClientTimeout(total=120)
+            dl_connector = aiohttp.TCPConnector(limit=max(32, int(config.download_concurrency) * 4))
+            async with aiohttp.ClientSession(timeout=timeout, connector=dl_connector) as session:
+                await run_tasks(session)
+
+    main_reports_by_year: dict[int, list[ReportItem]] = {}
+    main_path_maps_by_year: dict[int, dict[str, Path]] = {}
+
+    for filtered_path in sorted(output_dir.glob("*/filtered_announcements.jsonl")):
+        year_reports = load_report_items(filtered_path)
+        metadata_path = filtered_path.parent / "metadata.csv"
+        year_path_map: dict[str, Path] = {}
+        for item in year_reports:
+            if item.announcement_id in path_map:
+                year_path_map[item.announcement_id] = path_map[item.announcement_id]
+                continue
+            existing_path = find_existing_pdf_path(output_dir, item, pdf_locator_cache)
+            if existing_path is not None:
+                target_path = get_pdf_target_path(output_dir, item)
+                final_path = relocate_existing_pdf(existing_path, target_path)
+                update_pdf_locator_after_relocation(
+                    output_dir,
+                    item.report_year,
+                    existing_path,
+                    final_path,
+                    pdf_locator_cache,
+                )
+                year_path_map[item.announcement_id] = final_path
+        _write_metadata_csv(metadata_path, year_reports, year_path_map)
+        year_value = int(filtered_path.parent.name)
+        main_reports_by_year[year_value] = year_reports
+        main_path_maps_by_year[year_value] = year_path_map
+
+    for replaced_path in sorted(output_dir.glob(f"*/{REPLACED_REPORTS_MANIFEST_NAME}")):
+        year_reports = load_report_items(replaced_path)
+        metadata_path = replaced_path.parent / REPLACED_REPORTS_METADATA_NAME
+        year_path_map: dict[str, Path] = {}
+        for item in year_reports:
+            if item.announcement_id in archived_path_map:
+                year_path_map[item.announcement_id] = archived_path_map[item.announcement_id]
+                continue
+            existing_path = find_existing_pdf_path(output_dir, item, pdf_locator_cache)
+            if existing_path is not None:
+                target_path = get_replaced_pdf_target_path(output_dir, item)
+                final_path = relocate_existing_pdf(existing_path, target_path)
+                update_pdf_locator_after_relocation(
+                    output_dir,
+                    item.report_year,
+                    existing_path,
+                    final_path,
+                    pdf_locator_cache,
+                )
+                year_path_map[item.announcement_id] = final_path
+        year_value = int(replaced_path.parent.name)
+        _write_replaced_metadata_csv(
+            metadata_path,
+            year_reports,
+            year_path_map,
+            main_reports_by_year.get(year_value, []),
+            main_path_maps_by_year.get(year_value, {}),
+        )
+
+    merged_summary = merge_download_stats_into_summary(summary_path, yearly_stats)
+    elapsed = time.perf_counter() - start_time
+    if progress_callback is not None:
+        progress_callback(
+            {
+                "phase": "done",
+                "elapsed_seconds": elapsed,
+                "pdf_total": pdf_total,
+                "downloaded": aggregate["downloaded"],
+                "exists": aggregate["exists"],
+                "failed": aggregate["failed"],
+                "skipped": aggregate["skipped"],
+            }
+        )
+
+    return PdfDownloadResult(
+        output_dir=output_dir,
+        state_dir=state_dir,
+        summary_path=summary_path if summary_path.exists() else None,
+        summary=merged_summary,
+        elapsed_seconds=elapsed,
+        pdf_total=pdf_total,
+        downloaded=aggregate["downloaded"],
+        exists=aggregate["exists"],
+        failed=aggregate["failed"],
+        skipped=aggregate["skipped"],
+    )
 
 
 def main():
