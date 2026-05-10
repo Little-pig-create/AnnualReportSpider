@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Report Spider Webview Console</title>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script>
+      window.addEventListener("pywebviewready", function () {
+        window.__PYWEBVIEW_READY__ = true;
+      });
+      if (window.pywebview && window.pywebview.api) {
+        window.__PYWEBVIEW_READY__ = true;
+      }
+    </script>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

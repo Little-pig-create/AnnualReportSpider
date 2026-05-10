@@ -1,0 +1,11 @@
+{
+  "version": "4.4.0",
+  "url": "https://github.com/Little-pig-create/AnnualReportSpider/releases/download/4.4.0/AnnualReportSpider-Webview-Setup.exe",
+  "notes": [
+    "新增应用更新检测入口",
+    "关于页增加赞赏码与版本更新卡片",
+    "优化 Element Plus 按需加载与分包体积"
+  ],
+  "force": false,
+  "sha256": ""
+}

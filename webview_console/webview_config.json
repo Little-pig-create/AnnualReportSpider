@@ -1,0 +1,29 @@
+{
+  "workspace": {
+    "projectRoot": "C:\\Users\\xiaozhu\\Documents\\Codex",
+    "annualReportDir": "C:\\Users\\xiaozhu\\Documents\\Codex",
+    "textOutputDir": "txt_extract",
+    "stateDir": "C:\\Users\\xiaozhu\\Documents\\Codex",
+    "startYear": 2014,
+    "endYear": 2024
+  },
+  "links": {
+    "seDate": "",
+    "pageSize": 30,
+    "requestInterval": 0.2,
+    "announcementConcurrency": 2,
+    "marketScopes": [
+      "a_share"
+    ],
+    "resetCheckpoint": false,
+    "deleteCheckpointOnSuccess": false
+  },
+  "pdf": {
+    "downloadConcurrency": 2
+  },
+  "extract": {
+    "concurrency": 2,
+    "resetCheckpoint": false,
+    "deleteCheckpointOnSuccess": false
+  }
+}

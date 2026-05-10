@@ -1,0 +1,30 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.log
+build/
+dist/
+*.spec
+
+annual_reports/
+annual_reports_v2/
+txt_extract/
+cache/
+state_v2/
+checkpoint.json
+text_extract_checkpoint.json
+digital_transformation_checkpoint.jsonl
+digital_transformation_panel.csv
+digital_transformation_labels.csv
+gui_config.json
+
+*.part
+*.tmp
+
+* - 副本.py
+吴 等 - 2021 - 企业数字化转型与资本市场表现——来自股票流动性的经验证据.pdf
+
+# Web UI
+webui/node_modules/
+webui/dist/
