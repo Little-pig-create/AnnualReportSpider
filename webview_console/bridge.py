@@ -49,6 +49,9 @@ class Bridge:
     def get_about(self) -> dict[str, Any]:
         return self._runtime.get_about()
 
+    def check_update(self) -> dict[str, Any]:
+        return self._runtime.check_update()
+
     def get_incremental_status(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         return self._runtime.get_incremental_status(payload or {})
 

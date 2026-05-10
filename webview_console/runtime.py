@@ -28,6 +28,7 @@ from .models import Progress, RunState, STAGE_ORDER
 from .paths import history_path
 from .settings import AppSettings
 from .services import IncrementalStatusService
+from .services import UpdateService
 from .worker import ExecutionWorker
 
 
@@ -43,6 +44,7 @@ class Runtime:
         self._worker: ExecutionWorker | None = None
         self.history_store = HistoryStore(history_path())
         self.incremental_status_service = IncrementalStatusService()
+        self.update_service = UpdateService()
         self.visualization_index_service = VisualizationIndexService()
         self._allow_window_close = False
         self._close_request_pending = False
@@ -214,6 +216,12 @@ class Runtime:
 
     def get_about(self) -> dict[str, Any]:
         return self._ok(build_about_payload())
+
+    def check_update(self) -> dict[str, Any]:
+        try:
+            return self._ok(self.update_service.check())
+        except Exception as exc:
+            return self._error(INTERNAL_ERROR, str(exc))
 
     def get_incremental_status(self, payload: dict[str, Any]) -> dict[str, Any]:
         try:

@@ -132,50 +132,141 @@
       width="90%"
       append-to-body
     >
-      <div v-if="selectedItem" class="dialog__meta">
-        <p><b>运行 ID：</b>{{ selectedItem.runId }}</p>
-        <p><b>状态：</b>{{ runStatusText(selectedItem) }}</p>
-        <p><b>开始时间：</b>{{ formatDateTime(selectedItem.startedAt) }}</p>
-        <p><b>结束时间：</b>{{ formatDateTime(selectedItem.finishedAt) }}</p>
-        <p><b>运行时长：</b>{{ formatDuration(selectedItem.startedAt, selectedItem.finishedAt) }}</p>
-        <p><b>输出目录：</b>{{ selectedItem.outputDir || "-" }}</p>
-        <p><b>失败原因：</b>{{ selectedItem.error || "无" }}</p>
-      </div>
+      <div v-if="selectedItem" class="dialog-layout">
+        <section class="dialog-hero">
+          <div class="dialog-hero__main">
+            <p class="section-kicker">任务摘要</p>
+            <h3>{{ modeText(selectedItem.mode) }}</h3>
+            <p class="dialog-hero__desc">
+              运行 ID：{{ selectedItem.runId }}
+            </p>
+          </div>
+          <div class="dialog-hero__status" :data-tone="runStatusTone(selectedItem)">
+            {{ runStatusText(selectedItem) }}
+          </div>
+        </section>
 
-      <section v-if="selectedItem" class="dialog-block">
-        <header class="dialog-block__head">
-          <h4>阶段详情</h4>
-        </header>
-        <div class="dialog-stage-list">
-          <article v-for="stage in selectedItem.stages" :key="stage.name" class="dialog-stage-card">
-            <div class="dialog-stage-card__head">
-              <strong>{{ stage.title }}</strong>
-              <span>{{ statusText(stage.status) }}</span>
-            </div>
-            <p><b>提示：</b>{{ stage.hint || "无" }}</p>
-            <p><b>进度：</b>{{ stage.progress.current }}/{{ stage.progress.total }}</p>
-            <pre>{{ formatJson(stage.result) }}</pre>
+        <section v-if="selectedItem.error" class="dialog-alert">
+          <strong>失败原因</strong>
+          <p>{{ selectedItem.error }}</p>
+        </section>
+
+        <section class="dialog-block">
+          <header class="dialog-block__head">
+            <h4>基础信息</h4>
+          </header>
+          <div class="dialog-summary-grid">
+            <article class="dialog-summary-card">
+              <small>运行模式</small>
+              <strong>{{ modeText(selectedItem.mode) }}</strong>
+            </article>
+            <article class="dialog-summary-card">
+              <small>开始时间</small>
+              <strong>{{ formatDateTime(selectedItem.startedAt) }}</strong>
+            </article>
+            <article class="dialog-summary-card">
+              <small>结束时间</small>
+              <strong>{{ formatDateTime(selectedItem.finishedAt) }}</strong>
+            </article>
+            <article class="dialog-summary-card">
+              <small>运行时长</small>
+              <strong>{{ formatDuration(selectedItem.startedAt, selectedItem.finishedAt) }}</strong>
+            </article>
+            <article class="dialog-summary-card dialog-summary-card--wide">
+              <small>输出目录</small>
+              <strong>{{ selectedItem.outputDir || "-" }}</strong>
+            </article>
+          </div>
+        </section>
+
+        <section class="dialog-block">
+          <header class="dialog-block__head">
+            <h4>阶段结果结构图</h4>
+          </header>
+          <article class="dialog-chart-card">
+            <header class="dialog-chart-card__head">
+              <strong>单次任务结果构成</strong>
+              <span>用一张堆叠图解释各阶段的结果结构，适合快速复盘。</span>
+            </header>
+            <BaseChart :option="stageStructureChartOption" />
           </article>
-        </div>
-      </section>
+        </section>
 
-      <section v-if="selectedItem" class="dialog-block">
-        <header class="dialog-block__head">
-          <h4>结果摘要</h4>
-        </header>
-        <pre>{{ formatJson(selectedItem.summary) }}</pre>
-      </section>
+        <section class="dialog-block">
+          <header class="dialog-block__head">
+            <h4>阶段摘要卡</h4>
+          </header>
+          <div class="dialog-stage-list">
+            <article v-for="stage in selectedItem.stages" :key="stage.name" class="dialog-stage-card">
+              <div class="dialog-stage-card__head">
+                <div class="dialog-stage-card__title">
+                  <strong>{{ stage.title }}</strong>
+                  <span class="dialog-stage-card__status" :data-status="stage.status">
+                    {{ statusText(stage.status) }}
+                  </span>
+                </div>
+                <div class="dialog-stage-card__metrics">
+                  <strong class="dialog-stage-card__percent">{{ stagePercentText(stage) }}</strong>
+                  <span class="dialog-stage-card__progress">
+                    {{ stage.progress.current }}/{{ stage.progress.total }}
+                  </span>
+                </div>
+              </div>
+              <div class="dialog-stage-card__bar">
+                <div
+                  class="dialog-stage-card__bar-fill"
+                  :data-status="stage.status"
+                  :style="{ width: `${stagePercent(stage)}%` }"
+                />
+              </div>
+              <div class="dialog-stage-card__meta">
+                <span>进度百分比：{{ stagePercentText(stage) }}</span>
+                <span>阶段状态：{{ statusText(stage.status) }}</span>
+              </div>
+              <div v-if="stageMetrics(stage).length" class="dialog-stage-card__stats">
+                <article
+                  v-for="metric in stageMetrics(stage)"
+                  :key="`${stage.name}-${metric.label}`"
+                  class="dialog-stage-card__stat"
+                >
+                  <small>{{ metric.label }}</small>
+                  <strong>{{ metric.value }}</strong>
+                </article>
+              </div>
+              <p class="dialog-stage-card__hint">{{ stage.hint || "暂无阶段提示" }}</p>
+              <button class="mini-link dialog-stage-card__detail" @click="toggleStage(stage.name)">
+                {{ expandedStages.includes(stage.name) ? "收起原始结果" : "查看原始结果" }}
+              </button>
+              <pre v-if="expandedStages.includes(stage.name)">{{ formatJson(stage.result) }}</pre>
+            </article>
+          </div>
+        </section>
+
+        <section class="dialog-block">
+          <header class="dialog-block__head">
+            <h4>原始 JSON / 原始结果</h4>
+          </header>
+          <div class="dialog-raw-actions">
+            <button class="mini-link" @click="rawVisible = !rawVisible">
+              {{ rawVisible ? "收起摘要 JSON" : "展开摘要 JSON" }}
+            </button>
+          </div>
+          <pre v-if="rawVisible">{{ formatJson(selectedItem.summary) }}</pre>
+        </section>
+      </div>
     </ElDialog>
   </section>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from "vue";
-import { ElDialog, ElPagination } from "element-plus";
+import { computed, ref, watch } from "vue";
+import { ElDialog } from "element-plus/es/components/dialog/index";
+import { ElPagination } from "element-plus/es/components/pagination/index";
+import BaseChart from "@/components/BaseChart.vue";
 import { bridge } from "@/services/bridge";
 import { formatDateTime, formatDuration } from "@/services/datetime";
 import { getErrorMessage } from "@/services/errors";
-import type { AppSettings, HistoryItem } from "@/services/types";
+import type { AppSettings, HistoryItem, StageName, StageState } from "@/services/types";
 import { useAppStore } from "@/stores/app";
 import { useHistoryStore } from "@/stores/history";
 import { useSettingsStore } from "@/stores/settings";
@@ -192,11 +283,17 @@ const modeFilter = ref("ALL");
 const currentPage = ref(1);
 const pageSize = 12;
 const selectedItem = ref<HistoryItem | null>(null);
+const expandedStages = ref<StageName[]>([]);
+const rawVisible = ref(false);
 
 const detailVisible = computed({
   get: () => Boolean(selectedItem.value),
   set: (value: boolean) => {
-    if (!value) selectedItem.value = null;
+    if (!value) {
+      selectedItem.value = null;
+      expandedStages.value = [];
+      rawVisible.value = false;
+    }
   },
 });
 
@@ -241,6 +338,258 @@ function modeText(mode: string) {
     pipeline: "完整流程",
   }[mode] || mode;
 }
+
+function stagePercent(stage: StageState) {
+  const percent = Number(stage.progress?.percent || 0);
+  if (Number.isFinite(percent) && percent > 0) {
+    return Math.max(0, Math.min(100, Math.round(percent * 100)));
+  }
+  const current = Number(stage.progress?.current || 0);
+  const total = Number(stage.progress?.total || 0);
+  if (total > 0) {
+    return Math.max(0, Math.min(100, Math.round((current / total) * 100)));
+  }
+  if (stage.status === "completed") return 100;
+  return 0;
+}
+
+function stagePercentText(stage: StageState) {
+  return `${stagePercent(stage)}%`;
+}
+
+function metricValue(source: Record<string, any>, keys: string[]) {
+  for (const key of keys) {
+    if (source[key] !== undefined && source[key] !== null && source[key] !== "") {
+      return source[key];
+    }
+  }
+  return null;
+}
+
+function stageMetrics(stage: StageState) {
+  const source = (stage.result || {}) as Record<string, any>;
+
+  if (stage.name === "links") {
+    const rows = metricValue(source, ["rows", "totalAnnouncements", "recordsFound"]);
+    const rawRows = metricValue(source, ["rawRecordsFound"]);
+    const years = Array.isArray(source.years) ? source.years.length : metricValue(source, ["yearTotal"]);
+    const summaryPath = metricValue(source, ["summary_path", "summaryPath"]);
+    return [
+      rows !== null ? { label: "抓取条数", value: rows } : null,
+      rawRows !== null ? { label: "原始条数", value: rawRows } : null,
+      years !== null ? { label: "年份数量", value: years } : null,
+      summaryPath ? { label: "摘要文件", value: "已生成" } : null,
+    ].filter(Boolean) as Array<{ label: string; value: string | number }>;
+  }
+
+  if (stage.name === "pdf") {
+    const downloaded = Number(metricValue(source, ["downloaded"]) || 0);
+    const exists = Number(metricValue(source, ["exists"]) || 0);
+    const failed = Number(metricValue(source, ["failed"]) || 0);
+    const skipped = Number(metricValue(source, ["skipped"]) || 0);
+    return [
+      { label: "下载完成", value: downloaded },
+      { label: "已存在", value: exists },
+      { label: "失败数量", value: failed },
+      { label: "跳过数量", value: skipped },
+    ];
+  }
+
+  if (stage.name === "extract") {
+    const extracted = Number(metricValue(source, ["extracted"]) || 0);
+    const exists = Number(metricValue(source, ["exists"]) || 0);
+    const failed = Number(metricValue(source, ["failed"]) || 0);
+    const pdfTotal = metricValue(source, ["pdfTotal", "total"]);
+    return [
+      { label: "提取成功", value: extracted },
+      { label: "已存在", value: exists },
+      { label: "失败数量", value: failed },
+      pdfTotal !== null ? { label: "PDF 总量", value: pdfTotal } : null,
+    ].filter(Boolean) as Array<{ label: string; value: string | number }>;
+  }
+
+  return [];
+}
+
+const stageStructureChartOption = computed(() => {
+  const palette = {
+    linksMain: "#2A9D8F",
+    linksSoft: "#7FD1C7",
+    pdfMain: "#4C6FFF",
+    pdfSoft: "#A9B8FF",
+    pdfWarn: "#F4A261",
+    extractMain: "#7B61FF",
+    extractSoft: "#C5B8FF",
+    danger: "#E76F51",
+    axis: "#64748b",
+    grid: "rgba(148, 163, 184, 0.18)",
+    text: "#334155",
+  };
+
+  const stages = selectedItem.value?.stages || [];
+  const categories = stages.map((stage) => stage.title);
+
+  const linksProduced = stages.map((stage) => {
+    if (stage.name !== "links") return 0;
+    const source = (stage.result || {}) as Record<string, any>;
+    return Number(metricValue(source, ["rows", "totalAnnouncements", "recordsFound"]) || 0);
+  });
+
+  const linksRaw = stages.map((stage) => {
+    if (stage.name !== "links") return 0;
+    const source = (stage.result || {}) as Record<string, any>;
+    return Number(metricValue(source, ["rawRecordsFound"]) || 0);
+  });
+
+  const pdfCompleted = stages.map((stage) => {
+    if (stage.name !== "pdf") return 0;
+    const source = (stage.result || {}) as Record<string, any>;
+    return Number(source.downloaded || 0) + Number(source.exists || 0);
+  });
+
+  const pdfFailed = stages.map((stage) => {
+    if (stage.name !== "pdf") return 0;
+    const source = (stage.result || {}) as Record<string, any>;
+    return Number(source.failed || 0);
+  });
+
+  const pdfSkipped = stages.map((stage) => {
+    if (stage.name !== "pdf") return 0;
+    const source = (stage.result || {}) as Record<string, any>;
+    return Number(source.skipped || 0);
+  });
+
+  const extractCompleted = stages.map((stage) => {
+    if (stage.name !== "extract") return 0;
+    const source = (stage.result || {}) as Record<string, any>;
+    return Number(source.extracted || 0) + Number(source.exists || 0);
+  });
+
+  const extractFailed = stages.map((stage) => {
+    if (stage.name !== "extract") return 0;
+    const source = (stage.result || {}) as Record<string, any>;
+    return Number(source.failed || 0);
+  });
+
+  return {
+    tooltip: {
+      trigger: "axis",
+      axisPointer: { type: "shadow" },
+      backgroundColor: "rgba(255,255,255,0.96)",
+      borderColor: "rgba(148,163,184,0.2)",
+      borderWidth: 1,
+      textStyle: { color: palette.text },
+      extraCssText: "box-shadow: 0 16px 40px rgba(15, 23, 42, 0.14); border-radius: 14px;",
+    },
+    legend: {
+      bottom: 0,
+      itemWidth: 12,
+      itemHeight: 12,
+      icon: "roundRect",
+      textStyle: {
+        color: palette.axis,
+        fontSize: 12,
+        fontWeight: 600,
+      },
+    },
+    grid: {
+      left: 24,
+      right: 16,
+      top: 24,
+      bottom: 54,
+      containLabel: true,
+    },
+    xAxis: {
+      type: "category",
+      data: categories,
+      axisTick: { show: false },
+      axisLabel: {
+        color: palette.axis,
+        fontSize: 12,
+        margin: 12,
+      },
+      axisLine: {
+        lineStyle: {
+          color: "rgba(148, 163, 184, 0.35)",
+        },
+      },
+    },
+    yAxis: {
+      type: "value",
+      axisLabel: {
+        color: palette.axis,
+        fontSize: 12,
+        margin: 12,
+      },
+      axisLine: { show: false },
+      axisTick: { show: false },
+      splitLine: {
+        lineStyle: {
+          color: palette.grid,
+          type: "dashed",
+        },
+      },
+    },
+    series: [
+      {
+        name: "链接抓取",
+        type: "bar",
+        stack: "links",
+        data: linksProduced,
+        itemStyle: { color: palette.linksMain, borderRadius: 0 },
+        barMaxWidth: 28,
+      },
+      {
+        name: "链接原始",
+        type: "bar",
+        stack: "links",
+        data: linksRaw,
+        itemStyle: { color: palette.linksSoft, borderRadius: 0 },
+        barMaxWidth: 28,
+      },
+      {
+        name: "PDF 完成",
+        type: "bar",
+        stack: "pdf",
+        data: pdfCompleted,
+        itemStyle: { color: palette.pdfMain, borderRadius: 0 },
+        barMaxWidth: 28,
+      },
+      {
+        name: "PDF 失败",
+        type: "bar",
+        stack: "pdf",
+        data: pdfFailed,
+        itemStyle: { color: palette.danger, borderRadius: 0 },
+        barMaxWidth: 28,
+      },
+      {
+        name: "PDF 跳过",
+        type: "bar",
+        stack: "pdf",
+        data: pdfSkipped,
+        itemStyle: { color: palette.pdfWarn, borderRadius: 0 },
+        barMaxWidth: 28,
+      },
+      {
+        name: "提取完成",
+        type: "bar",
+        stack: "extract",
+        data: extractCompleted,
+        itemStyle: { color: palette.extractMain, borderRadius: 0 },
+        barMaxWidth: 28,
+      },
+      {
+        name: "提取失败",
+        type: "bar",
+        stack: "extract",
+        data: extractFailed,
+        itemStyle: { color: palette.extractSoft, borderRadius: 0 },
+        barMaxWidth: 28,
+      },
+    ],
+  };
+});
 
 const filteredItems = computed(() => {
   const text = keyword.value.toLowerCase();
@@ -295,6 +644,16 @@ async function refreshHistory() {
 
 function openDetail(item: HistoryItem) {
   selectedItem.value = item;
+  expandedStages.value = [];
+  rawVisible.value = false;
+}
+
+function toggleStage(name: StageName) {
+  if (expandedStages.value.includes(name)) {
+    expandedStages.value = expandedStages.value.filter((item) => item !== name);
+    return;
+  }
+  expandedStages.value = [...expandedStages.value, name];
 }
 
 function cloneSettingsSnapshot(snapshot: AppSettings): AppSettings {
@@ -341,12 +700,6 @@ function formatJson(value: unknown) {
   if (!value) return "无";
   return JSON.stringify(value, null, 2);
 }
-
-onMounted(() => {
-  if (historyStore.items.length === 0) {
-    historyStore.load().catch(() => {});
-  }
-});
 
 watch([keyword, statusFilter, modeFilter], () => {
   currentPage.value = 1;
@@ -648,16 +1001,92 @@ watch(
   color: #166534;
 }
 
-.dialog__meta {
+.dialog-layout {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px 20px;
+  gap: 18px;
 }
 
-.dialog__meta p {
+.dialog-hero {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+  padding: 20px 22px;
+  border-radius: 22px;
+  background: linear-gradient(135deg, rgba(15, 118, 110, 0.08), rgba(29, 78, 216, 0.06));
+}
+
+.dialog-hero__main {
+  display: grid;
+  gap: 8px;
+}
+
+.dialog-hero__main h3 {
   margin: 0;
-  word-break: break-all;
+  font-size: 28px;
+}
+
+.dialog-hero__desc {
+  margin: 0;
   color: var(--muted);
+  word-break: break-all;
+}
+
+.dialog-hero__status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  padding: 0 18px;
+  border-radius: 999px;
+  font-size: 14px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.dialog-hero__status[data-tone="success"] {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.dialog-hero__status[data-tone="running"] {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.dialog-hero__status[data-tone="warning"] {
+  background: #fff7ed;
+  color: #c2410c;
+}
+
+.dialog-hero__status[data-tone="danger"] {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.dialog-hero__status[data-tone="muted"] {
+  background: #e5e7eb;
+  color: #4b5563;
+}
+
+.dialog-alert {
+  display: grid;
+  gap: 8px;
+  padding: 16px 18px;
+  border-radius: 18px;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+}
+
+.dialog-alert strong {
+  color: #b91c1c;
+}
+
+.dialog-alert p {
+  margin: 0;
+  color: #991b1b;
+  line-height: 1.7;
+  word-break: break-all;
 }
 
 .dialog-block {
@@ -670,6 +1099,62 @@ watch(
   font-size: 20px;
 }
 
+.dialog-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.dialog-summary-card {
+  display: grid;
+  gap: 8px;
+  padding: 16px 18px;
+  border-radius: 18px;
+  background: var(--panel-alt);
+}
+
+.dialog-summary-card small {
+  color: var(--muted);
+}
+
+.dialog-summary-card strong {
+  color: #1f2937;
+  line-height: 1.6;
+  word-break: break-all;
+}
+
+.dialog-summary-card--wide {
+  grid-column: span 2;
+}
+
+.dialog-chart-card {
+  display: grid;
+  gap: 12px;
+  padding: 16px 18px;
+  border-radius: 18px;
+  background: var(--panel-alt);
+}
+
+.dialog-chart-card__head {
+  display: grid;
+  gap: 4px;
+}
+
+.dialog-chart-card__head strong {
+  color: #1f2937;
+  font-size: 16px;
+}
+
+.dialog-chart-card__head span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.dialog-chart-card :deep(.chart) {
+  min-height: 320px;
+}
+
 .dialog-stage-list {
   display: grid;
   gap: 12px;
@@ -677,7 +1162,7 @@ watch(
 
 .dialog-stage-card {
   display: grid;
-  gap: 10px;
+  gap: 12px;
   padding: 16px;
   border-radius: 18px;
   background: var(--panel-alt);
@@ -687,15 +1172,132 @@ watch(
   display: flex;
   justify-content: space-between;
   gap: 12px;
-  align-items: center;
+  align-items: flex-start;
 }
 
-.dialog-stage-card p,
+.dialog-stage-card__title {
+  display: grid;
+  gap: 6px;
+}
+
+.dialog-stage-card__metrics {
+  display: grid;
+  justify-items: end;
+  gap: 4px;
+}
+
+.dialog-stage-card__status {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.dialog-stage-card__status[data-status="completed"] {
+  color: #166534;
+}
+
+.dialog-stage-card__status[data-status="running"] {
+  color: #1d4ed8;
+}
+
+.dialog-stage-card__status[data-status="failed"],
+.dialog-stage-card__status[data-status="cancelled"] {
+  color: #b91c1c;
+}
+
+.dialog-stage-card__progress {
+  color: var(--muted);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.dialog-stage-card__percent {
+  color: #1f2937;
+  font-size: 20px;
+  line-height: 1;
+}
+
+.dialog-stage-card__bar {
+  position: relative;
+  width: 100%;
+  height: 10px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.16);
+  overflow: hidden;
+}
+
+.dialog-stage-card__bar-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: #94a3b8;
+  transition: width 0.24s ease;
+}
+
+.dialog-stage-card__bar-fill[data-status="completed"] {
+  background: linear-gradient(90deg, #34d399, #0f766e);
+}
+
+.dialog-stage-card__bar-fill[data-status="running"] {
+  background: linear-gradient(90deg, #60a5fa, #1d4ed8);
+}
+
+.dialog-stage-card__bar-fill[data-status="failed"],
+.dialog-stage-card__bar-fill[data-status="cancelled"] {
+  background: linear-gradient(90deg, #f87171, #dc2626);
+}
+
+.dialog-stage-card__meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+  flex-wrap: wrap;
+}
+
+.dialog-stage-card__stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.dialog-stage-card__stat {
+  display: grid;
+  gap: 6px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.58);
+}
+
+.dialog-stage-card__stat small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.dialog-stage-card__stat strong {
+  color: #1f2937;
+  font-size: 16px;
+  line-height: 1.4;
+  word-break: break-all;
+}
+
+.dialog-stage-card__hint {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.7;
+}
+
+.dialog-stage-card__detail {
+  justify-self: start;
+}
+
+.dialog-raw-actions {
+  display: flex;
+  justify-content: flex-start;
+}
+
 pre {
   margin: 0;
-}
-
-pre {
   padding: 14px;
   border-radius: 14px;
   background: #0f172a;
@@ -716,21 +1318,21 @@ pre::-webkit-scrollbar {
 }
 
 @media (max-width: 1180px) {
-  .history-head {
+  .history-head,
+  .dialog-hero {
     flex-direction: column;
     align-items: flex-start;
   }
 
   .history-toolbar,
-  .dialog__meta,
-  .history-card__grid {
+  .history-card__grid,
+  .dialog-summary-grid,
+  .dialog-stage-card__stats {
     grid-template-columns: 1fr;
   }
 
-  .history-card__top,
-  .history-card__footer {
-    flex-direction: column;
-    align-items: flex-start;
+  .dialog-summary-card--wide {
+    grid-column: span 1;
   }
 }
 </style>

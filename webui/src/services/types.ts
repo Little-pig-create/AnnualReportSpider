@@ -189,13 +189,61 @@ export interface VisualizationIndexSnapshot {
     yearBuckets: VisualizationIndexYearBucket[];
     total: number;
     completed: number;
+    speedPerMinute?: number;
+    etaSeconds?: number;
   };
   extract: {
     yearBuckets: VisualizationIndexYearBucket[];
     total: number;
     completed: number;
+    speedPerMinute?: number;
+    etaSeconds?: number;
   };
   meta: Record<string, any>;
+}
+
+export interface RuntimeSnapshot {
+  activeRunId: string | null;
+  status: RunStatus;
+  windowReady: boolean;
+}
+
+export interface RunSnapshot {
+  runId: string;
+  mode: RunMode;
+  status: RunStatus;
+  currentStage: StageName | null;
+  startedAt: string | null;
+  finishedAt: string | null;
+  summary: RunSummary;
+  error: string | null;
+  outputs?: Record<string, string>;
+}
+
+export interface StageSnapshotResponse {
+  items: StageState[];
+}
+
+export interface LogSnapshotResponse {
+  items: LogItem[];
+}
+
+export interface HistorySnapshotResponse {
+  items: HistoryItem[];
+}
+
+export interface UpdateCheckResult {
+  status: "available" | "current" | "error";
+  currentVersion: string;
+  latestVersion: string;
+  downloadUrl: string;
+  notes: string[];
+  force: boolean;
+  sha256: string;
+  sourceUrl: string;
+  message?: string;
+  attempts?: Array<{ url: string; error: string }>;
+  raw?: Record<string, any>;
 }
 
 export interface ApiError {

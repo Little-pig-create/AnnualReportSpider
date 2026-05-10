@@ -11,9 +11,13 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks(id) {
+          if (id.includes("node_modules/element-plus/es/components/dialog")) return "element-plus-dialog";
+          if (id.includes("node_modules/element-plus/es/components/pagination")) return "element-plus-pagination";
+          if (id.includes("node_modules/element-plus/es/components/message-box")) return "element-plus-message-box";
+          if (id.includes("node_modules/element-plus/es/components/notification")) return "element-plus-notification";
           if (id.includes("node_modules/echarts")) return "charts";
-          if (id.includes("node_modules/element-plus")) return "element-plus";
           if (id.includes("node_modules/vue") || id.includes("node_modules/pinia")) return "vue";
+          if (id.includes("node_modules/element-plus")) return "element-plus-core";
           if (id.includes("node_modules")) return "vendor";
           return undefined;
         },

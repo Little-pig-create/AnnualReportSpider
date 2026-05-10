@@ -1,12 +1,3 @@
-declare global {
-  interface Window {
-    pywebview?: {
-      api: Record<string, (...args: any[]) => Promise<any> | any>;
-    };
-    __DESKTOP_EVENT__?: (event: any) => void;
-  }
-}
-
 declare module "*.png" {
   const src: string;
   export default src;
@@ -26,5 +17,3 @@ declare module "*.svg" {
   const src: string;
   export default src;
 }
-
-export {};

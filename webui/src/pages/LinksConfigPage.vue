@@ -12,7 +12,7 @@
     </header>
 
     <div class="config-grid">
-      <section class="surface config-card">
+      <section class="surface config-card left-card">
         <header class="section-header">
           <div>
             <p class="section-kicker">请求参数</p>
@@ -72,7 +72,7 @@
         </div>
       </section>
 
-      <section class="surface config-card">
+      <section class="surface config-card right-card">
         <header class="section-header">
           <div>
             <p class="section-kicker">断点恢复</p>
@@ -126,6 +126,10 @@ function ensureMarketScopes() {
 .save-button { border: 0; border-radius: 999px; padding: 16px 22px; background: linear-gradient(135deg, #0f766e, #155e75); color: white; font-weight: 700; cursor: pointer; }
 .config-grid { display: grid; grid-template-columns: 1.05fr 0.95fr; gap: 24px; }
 .config-card { display: grid; gap: 18px; }
+.left-card,
+.right-card { align-content: start; gap: 10px; }
+.left-card .section-header,
+.right-card .section-header { margin-bottom: -4px; }
 .form-grid.two-cols { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
 .field { display: grid; gap: 10px; }
 .field--full { grid-column: 1 / -1; }

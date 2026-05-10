@@ -12,7 +12,7 @@
     </header>
 
     <div class="editor-layout">
-      <section class="surface editor-card">
+      <section class="surface editor-card core-card">
         <header class="section-header">
           <div>
             <p class="section-kicker">路径</p>
@@ -214,15 +214,18 @@ function testSound() {
 </script>
 
 <style scoped>
-.editor-page { display: grid; gap: 24px; }
+.editor-page { display: grid; gap: 20px; }
 .editor-head { display: flex; justify-content: space-between; gap: 20px; align-items: flex-start; }
-.editor-head h2 { margin: 6px 0 12px; font-size: 40px; }
+.editor-head h2 { margin: 2px 0 10px; font-size: 40px; }
 .editor-head p:last-child { margin: 0; color: var(--muted); max-width: 820px; }
 .save-button { border: 0; border-radius: 999px; padding: 16px 22px; background: linear-gradient(135deg, #0f766e, #155e75); color: white; font-weight: 700; cursor: pointer; }
 .editor-layout { display: grid; grid-template-columns: 1.1fr 0.9fr; gap: 24px; }
 .right-stack { display: grid; gap: 24px; align-content: start; }
-.editor-card { display: grid; gap: 18px; }
-.form-grid { display: grid; gap: 18px; }
+.editor-card { display: grid; gap: 14px; }
+.form-grid { display: grid; gap: 16px; margin-top: -12px; }
+.core-card { gap: 6px; align-content: start; }
+.core-card .section-header { margin-bottom: -6px; }
+.core-card .form-grid { margin-top: 0; }
 .range-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
 .field { display: grid; gap: 10px; }
 .field span { font-size: 13px; color: var(--muted); }

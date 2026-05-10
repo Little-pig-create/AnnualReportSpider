@@ -12,7 +12,7 @@
     </header>
 
     <div class="config-grid">
-      <section class="surface config-card">
+      <section class="surface config-card left-card">
         <header class="section-header">
           <div>
             <p class="section-kicker">并发</p>
@@ -64,6 +64,8 @@ const settings = computed(() => settingsStore.data);
 .save-button { border: 0; border-radius: 999px; padding: 16px 22px; background: linear-gradient(135deg, #0f766e, #155e75); color: white; font-weight: 700; cursor: pointer; }
 .config-grid { display: grid; grid-template-columns: 0.8fr 1.2fr; gap: 24px; }
 .config-card { display: grid; gap: 18px; }
+.left-card { align-content: start; gap: 10px; }
+.left-card .section-header { margin-bottom: -4px; }
 .field { display: grid; gap: 10px; }
 .field span { color: var(--muted); font-size: 13px; }
 .field input { width: 100%; border: 1px solid var(--line); border-radius: 18px; padding: 14px 16px; background: #fff; }

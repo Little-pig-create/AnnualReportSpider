@@ -65,6 +65,7 @@ import { useAppStore } from "@/stores/app";
 import { useHistoryStore } from "@/stores/history";
 import { useSettingsStore } from "@/stores/settings";
 import { useTaskStore } from "@/stores/task";
+import type { PageKey } from "@/services/types";
 
 const appStore = useAppStore();
 const historyStore = useHistoryStore();
@@ -82,7 +83,7 @@ const pageMap = {
   about: defineAsyncComponent(() => import("@/pages/AboutPage.vue")),
 };
 
-const navItems = [
+const navItems: Array<{ key: PageKey; label: string; eyebrow: string }> = [
   { key: "command", label: "任务总览", eyebrow: "总览" },
   { key: "workspace", label: "工作区", eyebrow: "路径" },
   { key: "links", label: "链接配置", eyebrow: "链接" },
