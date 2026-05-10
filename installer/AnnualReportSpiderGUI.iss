@@ -98,7 +98,7 @@ Source: "{#DistDir}\AnnualReportSpiderGUI\*"; DestDir: "{app}"; Flags: ignorever
 Source: "{#DistDir}\AnnualReportSpiderGUI.exe"; DestDir: "{app}"; Flags: ignoreversion
 #endif
 Source: "{#ProjectRoot}\README.md"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#ProjectRoot}\RELEASE_NOTES.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#ProjectRoot}\docs\RELEASE_NOTES.md"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\年报抓取桌面版"; Filename: "{app}\{#MyAppExeName}"

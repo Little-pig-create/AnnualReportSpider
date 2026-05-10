@@ -5,7 +5,7 @@ from typing import Any
 
 import requests
 
-from app_metadata import APP_VERSION, UPDATE_SOURCE_URLS
+from app_metadata import APP_VERSION, UPDATE_PRIMARY_CHANNEL, UPDATE_SOURCE_URLS
 
 
 def _split_version(value: str) -> list[int]:
@@ -51,7 +51,8 @@ class UpdateService:
                 if not latest_version:
                     raise ValueError("missing version")
 
-                download_url = str(payload.get("url") or payload.get("downloadUrl") or "").strip()
+                channel = self._channel_for_source(source_url)
+                download_url, download_file_name = self._resolve_download(payload, channel)
                 notes = payload.get("notes") if isinstance(payload.get("notes"), list) else []
                 has_update = _compare_versions(latest_version, current_version) > 0
 
@@ -60,6 +61,8 @@ class UpdateService:
                     "currentVersion": current_version,
                     "latestVersion": latest_version,
                     "downloadUrl": download_url,
+                    "downloadFileName": download_file_name,
+                    "downloadChannel": channel,
                     "notes": [str(item) for item in notes if str(item).strip()],
                     "force": bool(payload.get("force", False)),
                     "sha256": str(payload.get("sha256") or ""),
@@ -74,6 +77,8 @@ class UpdateService:
             "currentVersion": current_version,
             "latestVersion": current_version,
             "downloadUrl": "",
+            "downloadFileName": "",
+            "downloadChannel": "",
             "notes": [],
             "force": False,
             "sha256": "",
@@ -81,3 +86,26 @@ class UpdateService:
             "attempts": attempts,
             "message": "未能获取更新信息",
         }
+
+    @staticmethod
+    def _channel_for_source(source_url: str) -> str:
+        value = source_url.lower()
+        if "gitee.com" in value:
+            return "gitee"
+        if "github.com" in value or "githubusercontent.com" in value:
+            return "github"
+        return UPDATE_PRIMARY_CHANNEL
+
+    @staticmethod
+    def _resolve_download(payload: dict[str, Any], channel: str) -> tuple[str, str]:
+        downloads = payload.get("downloads")
+        if isinstance(downloads, dict):
+            installer = downloads.get("installer")
+            if isinstance(installer, dict):
+                file_name = str(installer.get("fileName") or "").strip()
+                download_url = str(installer.get(channel) or installer.get(UPDATE_PRIMARY_CHANNEL) or "").strip()
+                if download_url:
+                    return download_url, file_name
+
+        legacy_url = str(payload.get("downloadUrl") or payload.get("url") or "").strip()
+        return legacy_url, ""

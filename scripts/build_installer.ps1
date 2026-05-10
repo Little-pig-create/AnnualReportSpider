@@ -7,15 +7,17 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+$projectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $installerScriptPath = Join-Path $projectRoot "installer\AnnualReportSpiderGUI.iss"
 $distDir = Join-Path $projectRoot "dist"
 $outputDir = Join-Path $distDir "installer"
 $iconPath = Join-Path $projectRoot "assets\annual_report_spider.ico"
+$syncScriptPath = Join-Path $projectRoot "scripts\sync_update_manifest.py"
+$guiBuildScriptPath = Join-Path $projectRoot "scripts\build_gui.ps1"
 
 Set-Location $projectRoot
 
-python .\sync_update_manifest.py | Out-Null
+python $syncScriptPath | Out-Null
 if ($LASTEXITCODE -ne 0) {
     throw "Update manifest sync failed."
 }
@@ -52,7 +54,7 @@ Write-Host "Project root: $projectRoot"
 Write-Host "Installer mode: $Mode"
 
 if (-not $SkipGuiBuild) {
-    & powershell -ExecutionPolicy Bypass -File (Join-Path $projectRoot "build_gui.ps1") -Mode $Mode
+    & powershell -ExecutionPolicy Bypass -File $guiBuildScriptPath -Mode $Mode
     if ($LASTEXITCODE -ne 0) {
         throw "GUI build failed."
     }

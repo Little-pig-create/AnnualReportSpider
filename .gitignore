@@ -3,10 +3,12 @@ __pycache__/
 .venv/
 venv/
 *.log
+
+# Build outputs
 build/
 dist/
-*.spec
 
+# Project runtime/generated data
 annual_reports/
 annual_reports_v2/
 txt_extract/
@@ -18,13 +20,23 @@ digital_transformation_checkpoint.jsonl
 digital_transformation_panel.csv
 digital_transformation_labels.csv
 gui_config.json
+webview_console/webview_config.json
+run_history.json
+webview_console/run_history.json
 
+# Temporary files
 *.part
 *.tmp
 
+# Local duplicate / ad-hoc files
 * - 副本.py
 吴 等 - 2021 - 企业数字化转型与资本市场表现——来自股票流动性的经验证据.pdf
 
 # Web UI
 webui/node_modules/
 webui/dist/
+webui/.vite/
+webui/.cache/
+
+# Local archive
+_archive/

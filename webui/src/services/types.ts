@@ -237,6 +237,8 @@ export interface UpdateCheckResult {
   currentVersion: string;
   latestVersion: string;
   downloadUrl: string;
+  downloadFileName: string;
+  downloadChannel: string;
   notes: string[];
   force: boolean;
   sha256: string;

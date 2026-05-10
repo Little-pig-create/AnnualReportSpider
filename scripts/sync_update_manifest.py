@@ -3,15 +3,24 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import sys
 from pathlib import Path
 
-from app_metadata import APP_VERSION, build_release_download_url
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
-PROJECT_ROOT = Path(__file__).resolve().parent
+from app_metadata import (
+    APP_VERSION,
+    UPDATE_PRIMARY_CHANNEL,
+    build_primary_download_url,
+    build_release_download_urls,
+)
+
 APP_METADATA_PATH = PROJECT_ROOT / "app_metadata.py"
 UPDATE_MANIFEST_PATHS = (
     PROJECT_ROOT / "update.json",
-    PROJECT_ROOT / "update.json.example",
+    PROJECT_ROOT / "config" / "update.json.example",
 )
 VERSION_PATTERN = re.compile(r"^\d+\.\d+\.\d+$")
 
@@ -72,7 +81,8 @@ def update_app_metadata(version: str) -> bool:
 
 def sync_update_manifest(path: Path, version: str) -> bool:
     payload = json.loads(path.read_text(encoding="utf-8"))
-    expected_url = build_release_download_url(version)
+    expected_url = build_primary_download_url(version)
+    expected_downloads = build_release_download_urls(version)
     changed = False
 
     if payload.get("version") != version:
@@ -81,6 +91,18 @@ def sync_update_manifest(path: Path, version: str) -> bool:
 
     if payload.get("url") != expected_url:
         payload["url"] = expected_url
+        changed = True
+
+    if payload.get("downloadUrl") != expected_url:
+        payload["downloadUrl"] = expected_url
+        changed = True
+
+    if payload.get("primaryChannel") != UPDATE_PRIMARY_CHANNEL:
+        payload["primaryChannel"] = UPDATE_PRIMARY_CHANNEL
+        changed = True
+
+    if payload.get("downloads") != expected_downloads:
+        payload["downloads"] = expected_downloads
         changed = True
 
     if not changed:

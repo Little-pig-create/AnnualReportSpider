@@ -1,9 +1,9 @@
 {
   "workspace": {
-    "projectRoot": "C:\\Users\\xiaozhu\\Documents\\Codex",
-    "annualReportDir": "C:\\Users\\xiaozhu\\Documents\\Codex",
+    "projectRoot": "E:\\AnnualReportSpiderGUI",
+    "annualReportDir": "E:\\AnnualReportSpiderGUI\\annual_reports",
     "textOutputDir": "txt_extract",
-    "stateDir": "C:\\Users\\xiaozhu\\Documents\\Codex",
+    "stateDir": "E:\\AnnualReportSpiderGUI\\state_v2",
     "startYear": 2014,
     "endYear": 2024
   },

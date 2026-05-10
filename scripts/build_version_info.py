@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from app_metadata import (
     APP_FILE_VERSION,
@@ -19,8 +24,7 @@ def version_tuple_text(version: str) -> str:
 
 
 def main() -> None:
-    project_root = Path(__file__).resolve().parent
-    build_dir = project_root / "build"
+    build_dir = PROJECT_ROOT / "build"
     build_dir.mkdir(parents=True, exist_ok=True)
     output_path = build_dir / "version_info.txt"
 

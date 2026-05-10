@@ -3,7 +3,7 @@
   "url": "https://github.com/Little-pig-create/AnnualReportSpider/releases/download/4.4.57/AnnualReportSpiderGUI-Setup-4.4.57-onedir.exe",
   "notes": [
     "新增应用更新检测入口",
-    "补充关于页面的赞赏码与仓库链接",
+    "关于页增加赞赏码与版本更新卡片",
     "优化 Element Plus 按需加载与分包体积"
   ],
   "force": false,
