@@ -10,10 +10,10 @@ COPYRIGHT = "Copyright (c) 2026 Little-pig-create"
 GITHUB_URL = "https://github.com/Little-pig-create/AnnualReportSpider"
 GITEE_URL = "https://gitee.com/xiaozhusir/AnnualReportSpider"
 UPDATE_SOURCE_URLS = (
-    "https://gitee.com/xiaozhusir/AnnualReportSpider/raw/master/update.json",
+    "https://gitee.com/xiaozhusir/AnnualReportSpider/raw/codex/vuepywebview/update.json",
     "https://gitee.com/xiaozhusir/AnnualReportSpider/raw/main/update.json",
+    "https://raw.githubusercontent.com/Little-pig-create/AnnualReportSpider/codex/vuepywebview/update.json",
     "https://raw.githubusercontent.com/Little-pig-create/AnnualReportSpider/main/update.json",
-    "https://raw.githubusercontent.com/Little-pig-create/AnnualReportSpider/master/update.json",
 )
 APP_ICON_DIRNAME = "assets"
 APP_ICON_ICO_FILENAME = "annual_report_spider.ico"
