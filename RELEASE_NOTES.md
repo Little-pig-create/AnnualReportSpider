@@ -3,7 +3,7 @@
 ## 版本信息
 
 - 产品名称：年报抓取桌面版
-- 版本号：4.1.0
+- 版本号：4.3.0
 - 发布日期：2026-05-09
 - 项目主页：<https://github.com/Little-pig-create/AnnualReportSpider>
 
@@ -30,4 +30,3 @@
 1. 先备份旧配置与输出目录
 2. 拉取最新代码后执行前端重新构建：`cd webui && npm install && npm run build`
 3. 如需安装包分发，按 `PACKAGING.md` 重新打包
-

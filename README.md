@@ -136,7 +136,7 @@ powershell -ExecutionPolicy Bypass -File .\build_gui.ps1 -Mode onedir
 - 当前版本信息见 `RELEASE_NOTES.md`
 - 发布建议：
   1. 更新 `README.md` 与 `RELEASE_NOTES.md`
-  2. 提交代码并打标签（例如 `4.1.0`）
+  2. 提交代码并打标签（例如 `4.3.0`）
   3. 推送分支与标签到 GitHub
 
 ---
@@ -144,4 +144,3 @@ powershell -ExecutionPolicy Bypass -File .\build_gui.ps1 -Mode onedir
 ## 10. License
 
 仓库当前未附带明确开源许可证文件。若准备公开分发，建议补充 `LICENSE` 后再对外发布。
-
