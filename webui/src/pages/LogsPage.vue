@@ -4,7 +4,7 @@
       <div class="logs-head__copy">
         <p class="section-kicker">日志</p>
         <h2>运行日志中心</h2>
-        <p>按级别和阶段筛选日志，使用与首页一致的日志面板样式，方便快速定位问题。</p>
+        <p>按级别和阶段筛选日志，方便快速定位问题。</p>
       </div>
 
       <div class="filters">
@@ -28,7 +28,6 @@
     <section class="surface logs-panel">
       <div class="logs-summary">
         <strong>共 {{ filteredLogs.length }} 条</strong>
-        <span>日志中心样式已与首页同步</span>
       </div>
 
       <LogConsole :items="filteredLogs" class="logs-console" />
@@ -64,7 +63,7 @@ const filteredLogs = computed(() =>
   display: flex;
   justify-content: space-between;
   gap: 20px;
-  align-items: flex-start;
+  align-items: center;
 }
 
 .logs-head__copy {
@@ -87,6 +86,7 @@ const filteredLogs = computed(() =>
 .filters {
   display: flex;
   gap: 12px;
+  align-items: center;
 }
 
 .filters select {
@@ -121,8 +121,7 @@ const filteredLogs = computed(() =>
 
 .logs-summary {
   display: flex;
-  justify-content: space-between;
-  gap: 16px;
+  justify-content: flex-start;
   color: var(--muted);
 }
 

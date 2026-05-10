@@ -65,10 +65,10 @@ const settings = computed(() => settingsStore.data);
 
 <style scoped>
 .editor-page { display: grid; gap: 24px; }
-.editor-head { display: flex; justify-content: space-between; gap: 20px; align-items: flex-start; }
+.editor-head { display: flex; justify-content: space-between; gap: 20px; align-items: center; }
 .editor-head h2 { margin: 6px 0 12px; font-size: 40px; }
 .editor-head p:last-child { margin: 0; color: var(--muted); max-width: 760px; }
-.save-button { border: 0; border-radius: 999px; padding: 16px 22px; background: linear-gradient(135deg, #0f766e, #155e75); color: white; font-weight: 700; cursor: pointer; }
+.save-button { border: 0; border-radius: 999px; min-height: 52px; padding: 0 22px; display: inline-flex; align-items: center; justify-content: center; background: linear-gradient(135deg, #0f766e, #155e75); color: white; font-weight: 700; cursor: pointer; }
 .config-grid { display: grid; grid-template-columns: 0.8fr 1.2fr; gap: 24px; }
 .config-card { display: grid; gap: 18px; }
 .left-card { align-content: start; gap: 10px; }

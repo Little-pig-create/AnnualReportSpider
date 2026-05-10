@@ -25,6 +25,7 @@ export const useAppStore = defineStore("app", {
     about: null as Record<string, any> | null,
     updateChecking: false,
     updateInfo: null as UpdateCheckResult | null,
+    updateAutoChecked: false,
   }),
   actions: {
     setPage(page: PageKey) {
@@ -34,7 +35,8 @@ export const useAppStore = defineStore("app", {
       if (this.about) return;
       this.about = await bridge.getAbout();
     },
-    async checkUpdate() {
+    async checkUpdate(options?: { silentCurrent?: boolean; silentError?: boolean; force?: boolean }) {
+      if (this.updateAutoChecked && !options?.force) return this.updateInfo;
       if (this.updateChecking) return this.updateInfo;
       this.updateChecking = true;
       try {
@@ -42,15 +44,19 @@ export const useAppStore = defineStore("app", {
         this.updateInfo = result;
         if (result.status === "available") {
           this.showAlert(`发现新版本：${result.latestVersion}`, "success", "版本更新");
-        } else if (result.status === "current") {
+        } else if (result.status === "current" && !options?.silentCurrent) {
           this.showAlert("当前已是最新版本", "info", "版本更新");
-        } else {
+        } else if (result.status === "error" && !options?.silentError) {
           this.showAlert(result.message || "未能获取更新信息", "warning", "版本更新");
         }
+        this.updateAutoChecked = true;
         return result;
       } finally {
         this.updateChecking = false;
       }
+    },
+    async autoCheckUpdate() {
+      return this.checkUpdate({ silentCurrent: true, silentError: true });
     },
     showAlert(message: string, type: AppDialogType = "info", title?: string) {
       void loadNotificationModule()

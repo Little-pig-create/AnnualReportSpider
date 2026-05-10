@@ -12,8 +12,21 @@
               <small>项目作者</small>
               <strong>xiaomaojian</strong>
             </div>
+            <div class="topbar__author-item topbar__author-item--highlight topbar__author-item--version">
+              <small>版本号</small>
+              <strong>{{ appStore.about?.version || "-" }}</strong>
+            </div>
             <a
-              class="topbar__author-item topbar__author-item--link"
+              class="topbar__author-item topbar__author-item--link topbar__author-item--gitee"
+              href="https://gitee.com/xiaozhusir/AnnualReportSpider"
+              target="_blank"
+              rel="noreferrer"
+            >
+              <small>项目仓库</small>
+              <strong>https://gitee.com/xiaozhusir/AnnualReportSpider</strong>
+            </a>
+            <a
+              class="topbar__author-item topbar__author-item--link topbar__author-item--github"
               href="https://github.com/Little-pig-create/AnnualReportSpider"
               target="_blank"
               rel="noreferrer"
@@ -152,10 +165,12 @@ onMounted(async () => {
   try {
     await bridge.waitUntilReady();
     await Promise.all([
+      appStore.loadAbout().catch(() => {}),
       settingsStore.load(),
       taskStore.hydrateActiveRun(),
       taskStore.loadVisualizationIndex().catch(() => {}),
       historyStore.load(),
+      appStore.autoCheckUpdate().catch(() => {}),
     ]);
     appStore.bridgeReady = true;
   } catch (error) {

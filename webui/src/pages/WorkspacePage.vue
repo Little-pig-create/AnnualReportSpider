@@ -215,10 +215,10 @@ function testSound() {
 
 <style scoped>
 .editor-page { display: grid; gap: 20px; }
-.editor-head { display: flex; justify-content: space-between; gap: 20px; align-items: flex-start; }
+.editor-head { display: flex; justify-content: space-between; gap: 20px; align-items: center; }
 .editor-head h2 { margin: 2px 0 10px; font-size: 40px; }
 .editor-head p:last-child { margin: 0; color: var(--muted); max-width: 820px; }
-.save-button { border: 0; border-radius: 999px; padding: 16px 22px; background: linear-gradient(135deg, #0f766e, #155e75); color: white; font-weight: 700; cursor: pointer; }
+.save-button { border: 0; border-radius: 999px; min-height: 52px; padding: 0 22px; display: inline-flex; align-items: center; justify-content: center; background: linear-gradient(135deg, #0f766e, #155e75); color: white; font-weight: 700; cursor: pointer; }
 .editor-layout { display: grid; grid-template-columns: 1.1fr 0.9fr; gap: 24px; }
 .right-stack { display: grid; gap: 24px; align-content: start; }
 .editor-card { display: grid; gap: 14px; }

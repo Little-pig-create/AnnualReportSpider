@@ -46,18 +46,24 @@ function onInput(event: Event) {
   display: grid;
   grid-template-columns: 1fr auto;
   gap: 12px;
+  align-items: center;
 }
 
 .actions {
   display: flex;
   gap: 10px;
+  align-items: center;
 }
 
 button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border: 0;
   border-radius: 16px;
   background: var(--brand);
   color: white;
+  min-height: 48px;
   min-width: 76px;
   padding: 0 16px;
   cursor: pointer;

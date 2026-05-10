@@ -4,10 +4,7 @@
       <div class="history-head__copy">
         <p class="section-kicker">历史任务</p>
         <h2>任务历史中心</h2>
-        <p>
-          查看每次运行的开始时间、结束时间、运行时长、阶段结果、失败原因与输出目录，
-          支持搜索、筛选、导出与一键复跑。
-        </p>
+        <p>查看每次运行的开始时间、结束时间、运行时长、阶段结果、失败原因与输出目录，支持搜索、筛选、导出与一键复跑。</p>
       </div>
 
       <div class="history-head__actions">
@@ -726,7 +723,7 @@ watch(
   display: flex;
   justify-content: space-between;
   gap: 20px;
-  align-items: flex-start;
+  align-items: center;
 }
 
 .history-head__copy {
@@ -742,13 +739,16 @@ watch(
 .history-head p:last-child {
   margin: 0;
   color: var(--muted);
-  max-width: 820px;
   line-height: 1.7;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .history-head__actions {
   display: flex;
   gap: 12px;
+  align-items: center;
 }
 
 .refresh-button,
@@ -774,6 +774,7 @@ watch(
   display: grid;
   grid-template-columns: 1.2fr 0.4fr 0.4fr;
   gap: 16px;
+  align-items: center;
 }
 
 .toolbar-field {
